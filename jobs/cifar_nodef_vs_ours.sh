@@ -32,12 +32,19 @@ cp -r "$PROJ/FilterFL/." "$WORK/"
 cd "$WORK"
 mkdir -p saved_models   # handle.py does os.mkdir without parents
 
-# Share the CIFAR10 download between the two tasks if it already exists.
-if [ -d "$SCRATCH/ffl_data" ]; then ln -s "$SCRATCH/ffl_data" data; fi
+# Reuse the already-downloaded CIFAR10 (the reference code uses download=True into ./data,
+# which is very slow on the compute nodes). Copy so the shared dataset is never written to.
+DATA_SRC=$HOME/filterfl_test/filterfl_test/data
+rm -rf data && mkdir -p data
+cp -r "$DATA_SRC/cifar-10-batches-py" "$DATA_SRC/cifar-10-python.tar.gz" data/
 
 PARAMS=cifar_params.yaml
-if [ -n "${EPOCHS:-}" ]; then
-    sed "s/^epochs: .*/epochs: $EPOCHS/" cifar_params.yaml > cifar_params_run.yaml
+# Optional overrides (sbatch --export=ALL,EPOCHS=..,ALPHA=..,POISON_RATE=..): applied via sed to a copy of the params.
+if [ -n "${EPOCHS:-}${ALPHA:-}${POISON_RATE:-}" ]; then
+    cp cifar_params.yaml cifar_params_run.yaml
+    [ -n "${EPOCHS:-}" ]      && sed -i "s/^epochs: .*/epochs: $EPOCHS/" cifar_params_run.yaml
+    [ -n "${ALPHA:-}" ]       && sed -i "s/^dirichlet_alpha: .*/dirichlet_alpha: $ALPHA/" cifar_params_run.yaml
+    [ -n "${POISON_RATE:-}" ] && sed -i "s/^poison_rate: .*/poison_rate: $POISON_RATE/" cifar_params_run.yaml
     PARAMS=cifar_params_run.yaml
 fi
 
