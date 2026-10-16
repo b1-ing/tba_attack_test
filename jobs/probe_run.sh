@@ -23,7 +23,17 @@ SEEDS=(2 2 1)
 DEFS=(None ours ours)
 SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
 DEF=${DEFS[$SLURM_ARRAY_TASK_ID]}
-OUT=$HOME/ffl_probe/s${SEED}_${DEF}
+# Optional overrides via --export=ALL,POISON_RATE=0.5,REBALANCED=1,GAN1=10,GAN2=5
+RATE=${POISON_RATE:-0.3}
+SUFFIX=""; if [ "$RATE" != "0.3" ]; then SUFFIX="_r${RATE}"; fi
+# --export=ALL,REBALANCED=1  →  Check 3 rebalanced poisoning (strips natural class-0 from adversarial batches)
+REBAL_ARG=""; if [ "${REBALANCED:-0}" = "1" ]; then REBAL_ARG="--rebalanced"; SUFFIX="${SUFFIX}_rebal"; fi
+# Optional cGAN step overrides (reference 10 / 5): --export=ALL,GAN1=12,GAN2=2
+GAN_ARGS=""
+if [ -n "${GAN1:-}${GAN2:-}" ]; then
+    GAN_ARGS="--gan-epochs1 ${GAN1:-10} --gan-epochs2 ${GAN2:-5}"; SUFFIX="${SUFFIX}_g${GAN1:-10}-${GAN2:-5}"
+fi
+OUT=$HOME/ffl_probe/s${SEED}_${DEF}${SUFFIX}
 
 if [ ! -f "$PROJ/FilterFL/main.py" ]; then
     echo "ERROR: $PROJ/FilterFL/main.py missing - run 'git submodule update --init' in $PROJ" >&2
@@ -34,17 +44,17 @@ module purge
 module load miniforge/24.11.2
 source "$VENV/bin/activate"
 
-WORK=$SCRATCH/ffl_probe_${SLURM_ARRAY_JOB_ID}_s${SEED}_${DEF}
+WORK=$SCRATCH/ffl_probe_${SLURM_ARRAY_JOB_ID}_s${SEED}_${DEF}${SUFFIX}
 mkdir -p "$WORK" "$OUT"
 cp -r "$PROJ/FilterFL/." "$WORK/"
 cd "$WORK"
 rm -rf data && mkdir -p data
 cp -r "$DATA_SRC/cifar-10-batches-py" "$DATA_SRC/cifar-10-python.tar.gz" data/
 
-echo "Host: $(hostname) | seed=$SEED defence=$DEF | start: $(date)"
+echo "Host: $(hostname) | rate=$RATE seed=$SEED defence=$DEF | start: $(date)"
 nvidia-smi -L || echo "WARNING: no GPU visible"
 python "$PROJ/jobs/probe_run.py" --code-dir "$WORK" --outdir "$OUT" --defense "$DEF" \
-    --seed "$SEED" --alpha 0.5 --poison-rate 0.3
+    --seed "$SEED" --alpha 0.5 --poison-rate "$RATE" $GAN_ARGS $REBAL_ARG
 
 grep "count_all_attack" saved_models/model_*/log.txt | tail -n1 || true
 echo "Done: $(date)"
