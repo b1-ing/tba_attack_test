@@ -46,6 +46,8 @@ ap.add_argument('--seed', type=int, default=1)
 ap.add_argument('--alpha', type=float, default=0.5)
 ap.add_argument('--gan-epochs1', type=int, default=10)
 ap.add_argument('--gan-epochs2', type=int, default=5)
+ap.add_argument('--adv-clients', type=int, nargs='+', default=None,
+                help='Explicit adversarial client IDs to test (default: first in namelist)')
 args = ap.parse_args()
 
 code_dir = os.path.abspath(args.code_dir)
@@ -200,29 +202,37 @@ print(f'{"rate":>6}  {"prior":>7}  {"local_ASR":>10}  {"s3_score":>9}  '
       f'{"prior-s3_gap":>13}  client_id')
 
 rows = []
-adv_client = sorted(handle.adversarial_namelist)[0]  # fixed adversarial client for comparison
-for rate in sorted(args.rates):
-    params_copy = copy.deepcopy(params)
-    params_copy['poison_rate'] = rate
-    # Temporarily set poison_rate in params for train_client
-    orig_rate = params['poison_rate']
-    params['poison_rate'] = rate
+adv_namelist = sorted(handle.adversarial_namelist)
+if args.adv_clients is not None:
+    # filter to only those that are actually adversarial
+    test_clients = [c for c in args.adv_clients if c in adv_namelist]
+    if not test_clients:
+        print(f'WARNING: none of {args.adv_clients} are in adversarial_namelist {adv_namelist}')
+        test_clients = [adv_namelist[0]]
+else:
+    test_clients = [adv_namelist[0]]
 
-    local_state = train_client(global_state_ref, adv_client, poison=True, poison_rate=rate)
+for adv_client in test_clients:
+    print(f'\n--- Adversarial client {adv_client} ---')
+    for rate in sorted(args.rates):
+        orig_rate = params['poison_rate']
+        params['poison_rate'] = rate
 
-    eval_model = ResNet8(num_classes=10).to(device)
-    eval_model.load_state_dict(local_state)
-    prior, local_asr = measure_prior_and_asr(eval_model, test_loader)
+        local_state = train_client(global_state_ref, adv_client, poison=True, poison_rate=rate)
 
-    print(f'  Computing Stage-3 for rate={rate:.2f}...', flush=True)
-    s3 = measure_stage3(global_state_ref, local_state)
+        eval_model = ResNet8(num_classes=10).to(device)
+        eval_model.load_state_dict(local_state)
+        prior, local_asr = measure_prior_and_asr(eval_model, test_loader)
 
-    params['poison_rate'] = orig_rate
+        print(f'  Computing Stage-3 for rate={rate:.2f}...', flush=True)
+        s3 = measure_stage3(global_state_ref, local_state)
 
-    print(f'{rate:>6.2f}  {prior:>7.4f}  {local_asr:>10.4f}  {s3:>9.4f}  '
-          f'{prior - s3:>13.4f}  client={adv_client}')
-    rows.append({'rate': rate, 'prior': prior, 'local_asr': local_asr, 's3': s3,
-                 'client': adv_client, 'type': 'adversarial'})
+        params['poison_rate'] = orig_rate
+
+        print(f'{rate:>6.2f}  {prior:>7.4f}  {local_asr:>10.4f}  {s3:>9.4f}  '
+              f'{prior - s3:>13.4f}  client={adv_client}')
+        rows.append({'rate': rate, 'prior': prior, 'local_asr': local_asr, 's3': s3,
+                     'client': adv_client, 'type': 'adversarial'})
 
 # Spearman correlations
 def spearman(x, y):
@@ -231,14 +241,26 @@ def spearman(x, y):
         return float('nan')
     return float(np.corrcoef(np.argsort(np.argsort(x)), np.argsort(np.argsort(y)))[0, 1])
 
-rates_arr  = [r['rate']      for r in rows if r['type'] == 'adversarial']
-priors_arr = [r['prior']     for r in rows if r['type'] == 'adversarial']
-asrs_arr   = [r['local_asr'] for r in rows if r['type'] == 'adversarial']
-s3_arr     = [r['s3']        for r in rows if r['type'] == 'adversarial']
+adv_rows = [r for r in rows if r['type'] == 'adversarial']
 
-print(f'\nSpearman(rate, prior)     = {spearman(rates_arr, priors_arr):+.3f}  [prediction: strongly positive]')
-print(f'Spearman(rate, local_ASR) = {spearman(rates_arr, asrs_arr):+.3f}  [prediction: weaker / saturates]')
-print(f'Spearman(rate, s3_score)  = {spearman(rates_arr, s3_arr):+.3f}  [should track prior, not ASR]')
+# Per-client tables
+for c in test_clients:
+    c_rows = [r for r in adv_rows if r['client'] == c]
+    print(f'\n--- Client {c} summary ---')
+    print(f'{"rate":>6}  {"prior":>7}  {"local_ASR":>10}  {"s3_score":>9}')
+    for r in sorted(c_rows, key=lambda x: x['rate']):
+        print(f'{r["rate"]:>6.2f}  {r["prior"]:>7.4f}  {r["local_asr"]:>10.4f}  {r["s3"]:>9.4f}')
+
+# Pooled correlations across all clients
+rates_arr  = [r['rate']      for r in adv_rows]
+priors_arr = [r['prior']     for r in adv_rows]
+asrs_arr   = [r['local_asr'] for r in adv_rows]
+s3_arr     = [r['s3']        for r in adv_rows]
+
+print(f'\nPooled Spearman across {len(test_clients)} client(s) (n={len(adv_rows)}):')
+print(f'Spearman(rate, prior)     = {spearman(rates_arr, priors_arr):+.3f}')
+print(f'Spearman(rate, local_ASR) = {spearman(rates_arr, asrs_arr):+.3f}')
+print(f'Spearman(rate, s3_score)  = {spearman(rates_arr, s3_arr):+.3f}')
 print(f'Spearman(prior, s3_score) = {spearman(priors_arr, s3_arr):+.3f}  [should be strongly positive]')
 print(f'Spearman(ASR,   s3_score) = {spearman(asrs_arr,  s3_arr):+.3f}  [should be weaker]')
 

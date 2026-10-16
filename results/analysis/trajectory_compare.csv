@@ -1,0 +1,71 @@
+run,win_start,win_end,n_attacker_rows,n_benign_rows,attacker_p0_median,benign_p0_median,auc
+"blind-spot r0.25 s0 (filterfl_test, 1000 rds)",1,100,104,896,0.4644,0.0388,0.9497
+"blind-spot r0.25 s0 (filterfl_test, 1000 rds)",101,200,102,898,0.4853,0.0459,0.9565
+"blind-spot r0.25 s0 (filterfl_test, 1000 rds)",201,300,101,899,0.4126,0.0638,0.9462
+"blind-spot r0.25 s0 (filterfl_test, 1000 rds)",301,400,94,906,0.3628,0.0807,0.9369
+"blind-spot r0.25 s0 (filterfl_test, 1000 rds)",401,500,109,891,0.3118,0.0888,0.9281
+"blind-spot r0.25 s0 (filterfl_test, 1000 rds)",501,600,99,901,0.2647,0.0871,0.9206
+"blind-spot r0.25 s0 (filterfl_test, 1000 rds)",601,700,96,904,0.2442,0.0900,0.9031
+"blind-spot r0.25 s0 (filterfl_test, 1000 rds)",701,800,98,902,0.2257,0.0977,0.8904
+"blind-spot r0.25 s0 (filterfl_test, 1000 rds)",801,900,112,888,0.1891,0.0978,0.8930
+"blind-spot r0.25 s0 (filterfl_test, 1000 rds)",901,1000,109,891,0.1975,0.1158,0.8456
+ref r0.25 s1 (reference code),1,100,106,894,0.4235,0.0246,0.9062
+ref r0.25 s1 (reference code),101,200,99,901,0.3967,0.0387,0.9021
+ref r0.25 s1 (reference code),201,300,91,909,0.3866,0.0492,0.9149
+ref r0.25 s1 (reference code),301,400,107,893,0.3288,0.0672,0.9025
+ref r0.25 s1 (reference code),401,500,115,885,0.3094,0.0830,0.9070
+ref r0.25 s1 (reference code),501,600,99,901,0.2782,0.0884,0.8984
+ref r0.25 s1 (reference code),601,700,107,893,0.2676,0.0998,0.9103
+ref r0.25 s1 (reference code),701,800,96,904,0.2636,0.1073,0.9001
+ref r0.25 s1 (reference code),801,900,93,907,0.2666,0.1133,0.9016
+ref r0.25 s1 (reference code),901,1000,108,892,0.2502,0.1217,0.8964
+ref r0.25 s1 (reference code),1001,1100,104,896,0.2389,0.1136,0.9107
+ref r0.25 s1 (reference code),1101,1200,86,914,0.2279,0.1113,0.9073
+ref r0.25 s1 (reference code),1201,1300,92,908,0.1913,0.1036,0.8892
+ref r0.25 s1 (reference code),1301,1400,103,897,0.1993,0.1197,0.8598
+ref r0.25 s1 (reference code),1401,1500,109,891,0.1972,0.1153,0.8445
+ref r0.25 s1 (reference code),1501,1600,107,893,0.1782,0.1076,0.8175
+ref r0.25 s1 (reference code),1601,1700,92,908,0.1682,0.1112,0.8100
+ref r0.25 s1 (reference code),1701,1800,106,894,0.1435,0.1037,0.7620
+ref r0.25 s1 (reference code),1801,1900,111,889,0.1375,0.1062,0.6868
+ref r0.25 s1 (reference code),1901,2000,97,903,0.1454,0.1071,0.7228
+ref r0.3 s1 (reference code),1,100,106,894,0.5504,0.0214,0.9412
+ref r0.3 s1 (reference code),101,200,99,901,0.6104,0.0284,0.9699
+ref r0.3 s1 (reference code),201,300,91,909,0.6300,0.0347,0.9803
+ref r0.3 s1 (reference code),301,400,107,893,0.5346,0.0587,0.9745
+ref r0.3 s1 (reference code),401,500,115,885,0.4736,0.0828,0.9620
+ref r0.3 s1 (reference code),501,600,99,901,0.3817,0.0871,0.9515
+ref r0.3 s1 (reference code),601,700,107,893,0.3574,0.1009,0.9542
+ref r0.3 s1 (reference code),701,800,96,904,0.3367,0.1157,0.9441
+ref r0.3 s1 (reference code),801,900,93,907,0.3459,0.1301,0.9410
+ref r0.3 s1 (reference code),901,1000,108,892,0.3248,0.1407,0.9390
+ref r0.3 s1 (reference code),1001,1100,104,896,0.2964,0.1241,0.9468
+ref r0.3 s1 (reference code),1101,1200,86,914,0.2802,0.1205,0.9404
+ref r0.3 s1 (reference code),1201,1300,92,908,0.2524,0.1232,0.9303
+ref r0.3 s1 (reference code),1301,1400,103,897,0.2643,0.1446,0.9217
+ref r0.3 s1 (reference code),1401,1500,109,891,0.2490,0.1430,0.8920
+ref r0.3 s1 (reference code),1501,1600,107,893,0.2191,0.1254,0.8787
+ref r0.3 s1 (reference code),1601,1700,92,908,0.2036,0.1276,0.8555
+ref r0.3 s1 (reference code),1701,1800,106,894,0.1773,0.1208,0.8230
+ref r0.3 s1 (reference code),1801,1900,111,889,0.1785,0.1266,0.7729
+ref r0.3 s1 (reference code),1901,2000,97,903,0.1851,0.1321,0.7995
+ref r0.3 s2 (reference code),1,100,90,910,0.5628,0.0243,0.9596
+ref r0.3 s2 (reference code),101,200,105,895,0.6007,0.0355,0.9658
+ref r0.3 s2 (reference code),201,300,89,911,0.5989,0.0420,0.9789
+ref r0.3 s2 (reference code),301,400,100,900,0.5526,0.0561,0.9793
+ref r0.3 s2 (reference code),401,500,99,901,0.4540,0.0891,0.9772
+ref r0.3 s2 (reference code),501,600,121,879,0.3811,0.1008,0.9738
+ref r0.3 s2 (reference code),601,700,111,889,0.3597,0.1123,0.9776
+ref r0.3 s2 (reference code),701,800,114,886,0.3178,0.1153,0.9658
+ref r0.3 s2 (reference code),801,900,109,891,0.3031,0.1229,0.9619
+ref r0.3 s2 (reference code),901,1000,88,912,0.2897,0.1301,0.9617
+ref r0.3 s2 (reference code),1001,1100,95,905,0.2563,0.1235,0.9608
+ref r0.3 s2 (reference code),1101,1200,99,901,0.2541,0.1218,0.9526
+ref r0.3 s2 (reference code),1201,1300,96,904,0.2380,0.1250,0.9213
+ref r0.3 s2 (reference code),1301,1400,94,906,0.2354,0.1289,0.9053
+ref r0.3 s2 (reference code),1401,1500,99,901,0.2409,0.1377,0.9188
+ref r0.3 s2 (reference code),1501,1600,106,894,0.1921,0.1232,0.8823
+ref r0.3 s2 (reference code),1601,1700,98,902,0.1975,0.1153,0.8897
+ref r0.3 s2 (reference code),1701,1800,99,901,0.1887,0.1177,0.8459
+ref r0.3 s2 (reference code),1801,1900,105,895,0.1755,0.1169,0.8626
+ref r0.3 s2 (reference code),1901,2000,110,890,0.1730,0.1270,0.7886

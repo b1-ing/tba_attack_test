@@ -1,0 +1,31 @@
+current path: saved_models/model_CIFAR10_Oct.16_17.47.40
+Loading data
+reading data done
+build_classes_dict done
+train loaders done
+get poison test loader
+Files already downloaded and verified
+Files already downloaded and verified
+Files already downloaded and verified
+Traceback (most recent call last):
+  File "/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/tba_attack_test/jobs/check1_prior.py", line 83, in <module>
+    handle.create_model()
+  File "/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/scratch/ffl_probe_23217380_s1_ours/handle.py", line 320, in create_model
+    model = model.to(device)
+            ^^^^^^^^^^^^^^^^
+  File "/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/venvs/tba_attack/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1340, in to
+    return self._apply(convert)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/venvs/tba_attack/lib/python3.12/site-packages/torch/nn/modules/module.py", line 900, in _apply
+    module._apply(fn)
+  File "/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/venvs/tba_attack/lib/python3.12/site-packages/torch/nn/modules/module.py", line 927, in _apply
+    param_applied = fn(param)
+                    ^^^^^^^^^
+  File "/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/venvs/tba_attack/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1326, in convert
+    return t.to(
+           ^^^^^
+RuntimeError: CUDA error: CUDA-capable device(s) is/are busy or unavailable
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+

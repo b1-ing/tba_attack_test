@@ -16,6 +16,7 @@
 #   RATES="0.1 0.25 0.3 0.5"
 #   SKIP_WARMUP=1     reuse existing warmup_ckpt.pt in output dir
 #   N_BENIGN=5        how many top-flagged benign clients to evaluate
+#   ADV_CLIENTS="34 36 45 47"  adversarial client IDs to test (default: first only)
 
 set -euo pipefail
 
@@ -28,8 +29,11 @@ PROBE_NPZ=$HOME/ffl_probe/s1_ours/probes.npz
 WARMUP=${WARMUP:-50}
 RATES=${RATES:-"0.1 0.2 0.25 0.3 0.4 0.5"}
 N_BENIGN=${N_BENIGN:-5}
+ADV_CLIENTS=${ADV_CLIENTS:-""}
 SKIP_ARG=""
 if [ "${SKIP_WARMUP:-0}" = "1" ]; then SKIP_ARG="--skip-warmup"; fi
+ADV_ARG=""
+if [ -n "$ADV_CLIENTS" ]; then ADV_ARG="--adv-clients $ADV_CLIENTS"; fi
 
 OUT=$HOME/ffl_check1
 mkdir -p "$OUT"
@@ -60,6 +64,7 @@ python "$PROJ/jobs/check1_prior.py" \
     --rates $RATES \
     --n-benign "$N_BENIGN" \
     $SKIP_ARG \
+    $ADV_ARG \
     2>&1 | tee "$OUT/check1_prior.log"
 
 echo "Done: $(date)"
