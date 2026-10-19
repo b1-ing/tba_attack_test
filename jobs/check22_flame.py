@@ -102,19 +102,37 @@ for p in pos64:
     trigger_np[:, h_p, w_p] = args.amplitude
 trigger_t = torch.from_numpy(trigger_np).to(device)
 
-# ── Flatten helper ────────────────────────────────────────────────────────────
+# ── Flatten helper — trainable params only (exclude BN running stats/buffers) ──
+_BUFFER_KEYS = ('running_mean', 'running_var', 'num_batches_tracked')
+
+def is_param(key):
+    return not any(key.endswith(b) for b in _BUFFER_KEYS)
+
 def flatten(state_dict):
     return np.concatenate([v.float().cpu().numpy().flatten()
-                           for v in state_dict.values()])
+                           for k, v in state_dict.items() if is_param(k)])
 
-def unflatten_into(agg_flat, ref_state):
+def unflatten_into(agg_flat, ref_state, local_states_for_bufs=None):
+    """Reconstruct state dict.
+    agg_flat contains the aggregated delta for trainable params only.
+    BN buffers are averaged directly from local_states (no noise added).
+    """
     new_state = {}
     offset = 0
     for k, v in ref_state.items():
-        numel = v.numel()
-        chunk = agg_flat[offset:offset + numel].reshape(v.shape)
-        new_state[k] = v.cpu().float() + torch.from_numpy(chunk.astype(np.float32))
-        offset += numel
+        if is_param(k):
+            numel = v.numel()
+            chunk = agg_flat[offset:offset + numel].reshape(v.shape)
+            new_state[k] = v.cpu().float() + torch.from_numpy(chunk.astype(np.float32))
+            offset += numel
+        else:
+            # Average buffer values from the kept local states
+            if local_states_for_bufs:
+                avg = torch.stack([w[k].float().cpu()
+                                   for w in local_states_for_bufs]).mean(0)
+                new_state[k] = avg
+            else:
+                new_state[k] = v.cpu()
     return new_state
 
 # ── FLAME aggregation ─────────────────────────────────────────────────────────
@@ -133,7 +151,8 @@ def flame_aggregate(global_state, local_states, client_ids, lambda_noise, rng):
     # HDBSCAN majority clustering
     min_cs = max(2, n // 2 + 1)
     try:
-        labels = HDBSCAN(min_cluster_size=min_cs, metric='precomputed').fit_predict(cos_dist)
+        labels = HDBSCAN(min_cluster_size=min_cs, metric='precomputed',
+                              allow_single_cluster=True).fit_predict(cos_dist)
     except Exception:
         labels = np.zeros(n, dtype=int)   # fallback: keep all
 
@@ -162,7 +181,8 @@ def flame_aggregate(global_state, local_states, client_ids, lambda_noise, rng):
     if sigma > 0:
         agg = agg + rng.normal(0.0, sigma, agg.shape).astype(np.float32)
 
-    new_state = unflatten_into(agg, global_state)
+    kept_local = [local_states[i] for i in range(n) if keep[i]]
+    new_state = unflatten_into(agg, global_state, kept_local)
     return new_state, kept_ids, excluded_ids, S_t, sigma
 
 # ── FedAvg aggregation ─────────────────────────────────────────────────────────
@@ -172,7 +192,7 @@ def fedavg_aggregate(global_state, local_states, client_ids, sizes):
     deltas = np.stack([flatten(w) - g_flat for w in local_states])
     weights = np.array(sizes, dtype=np.float32) / total
     agg = (deltas * weights[:, None]).sum(axis=0)
-    return unflatten_into(agg, global_state)
+    return unflatten_into(agg, global_state, local_states)
 
 # ── Metric: ASR + clean acc on global model ───────────────────────────────────
 def global_metrics(global_state):
