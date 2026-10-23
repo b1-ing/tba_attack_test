@@ -1,0 +1,13 @@
+Array task 4: mode=eval trigger=cov64pos
+yaml patched
+algorithm.py patched for eval-mode probe
+trigger set to cov64pos
+Traceback (most recent call last):
+  File "/net/scratch/x77599jl/step5_ffl_23394106_4/FilterFL/main.py", line 33, in <module>
+    handle = Handle(current_time=current_time, params=params_loaded,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/net/scratch/x77599jl/step5_ffl_23394106_4/FilterFL/handle.py", line 49, in __init__
+    os.mkdir(self.folder_path)
+FileNotFoundError: [Errno 2] No such file or directory: 'saved_models/model_CIFAR10_Oct.19_15.08.07'
+Parsed 0 FEAT_ALIGN rows → /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/step5_filterfl_eval_cov64pos.csv
+Done: filterfl_eval_cov64pos

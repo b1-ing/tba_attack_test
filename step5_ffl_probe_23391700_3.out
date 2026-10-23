@@ -1,0 +1,11 @@
+Array task 3: mode=eval trigger=checker
+mkdir: cannot create directory ‘/step5_ffl_23391700_3’: Permission denied
+cp: cannot create directory '/step5_ffl_23391700_3/': Permission denied
+/var/spool/slurmd/job23391755/slurm_script: line 43: cd: /step5_ffl_23391700_3: No such file or directory
+yaml patched
+algorithm.py patched for eval-mode probe
+trigger set to checker
+/var/spool/slurmd/job23391755/slurm_script: line 121: cd: /step5_ffl_23391700_3/FilterFL: No such file or directory
+python3: can't open file '/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/tba_attack_test/main.py': [Errno 2] No such file or directory
+Parsed 0 FEAT_ALIGN rows → /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/step5_filterfl_eval_checker.csv
+Done: filterfl_eval_checker

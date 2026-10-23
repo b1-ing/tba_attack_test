@@ -1,0 +1,30 @@
+CIFAR-10 data staged
+current path: saved_models/model_CIFAR10_Oct.20_09.36.03
+Loading data
+reading data done
+build_classes_dict done
+train loaders done
+get poison test loader
+/net/scratch/x77599jl/step5_pool_23415990/jobs/step5_pooling_gain.py:54: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  model.load_state_dict(torch.load(ckpt_path, map_location='cpu'))
+Files already downloaded and verified
+Files already downloaded and verified
+Files already downloaded and verified
+Loaded /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_check1/warmup_ckpt.pt
+Using 500 non-target images
+
+           trigger     conv1_Δ       gap_Δ    gap/L2    L2_raw    Linf_raw
+           checker     0.24497     0.30860    0.0493    6.2634    0.114500
+           stripes     0.23705     0.37179    0.0594    6.2634    0.114500
+         corner4x4     0.00445     0.00700    0.0089    0.7829    0.114500
+             sin16     0.13757     0.09891    0.0158    6.2627    0.161911
+             sin32     0.12346     0.08202    0.0131    6.2627    0.161911
+             noise     0.24040     0.25094    0.0401    6.2634    0.114500
+  checker_patch_l2     0.08127     0.08816    0.0425    2.0743    0.037921
+              eps4     0.01541     0.01187    0.0302    0.3930    0.007184
+              eps8     0.03080     0.02520    0.0321    0.7860    0.014369
+             patch     0.01402     0.02275    0.0113    2.0053    0.714000
+
+Done. CSV: /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/scratch/step5_pool_23415990/step5_pooling_gain.csv
+Copied pooling_gain CSV to /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/
+Done.

@@ -1,0 +1,12 @@
+Array task 11: defense=flame trigger=cov64pos alpha=0.5
+mkdir: cannot create directory ‘/step5_23391699_11’: Permission denied
+cp: cannot create directory '/step5_23391699_11/': Permission denied
+cp: cannot create directory '/step5_23391699_11/': Permission denied
+/var/spool/slurmd/job23391746/slurm_script: line 60: cd: /step5_23391699_11: No such file or directory
+yaml patched
+Traceback (most recent call last):
+  File "/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/tba_attack_test/jobs/step5_rerun.py", line 51, in <module>
+    os.chdir(code_dir)
+FileNotFoundError: [Errno 2] No such file or directory: '/step5_23391699_11/FilterFL'
+Done. Results in /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5
+ls: cannot access '/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/step5_*': No such file or directory

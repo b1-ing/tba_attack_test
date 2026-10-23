@@ -1,0 +1,30 @@
+step5_bn_mode job 23509718 on node889.csf3.man.alces.network
+probe_dir: /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/probes_checker2
+trigger_utils v1.3.0  device: cuda:0
+rho: 0.5 (rounds ≤500), 0.4 (rounds >500)
+
+Available probe rounds: [50, 150, 250, 330, 400]
+
+  Rnd         Model   s3_train   arg_train    s3_eval    arg_eval     delta    rho  note
+-----------------------------------------------------------------------------------------------
+    50    global(d2)     0.1769           7     0.0001           6   +0.1768   0.50  train: eval:✓ ok
+    50     adv_local     0.9384           0     0.0003           2   +0.9382   0.50  train:⚠ CROSS eval:✓ ok
+
+   150    global(d2)     0.3540           0     0.0000           6   +0.3540   0.50  train: eval:✓ ok
+   150     adv_local     0.9162           0     0.0035           4   +0.9127   0.50  train:⚠ CROSS eval:✓ ok
+
+   250    global(d2)     0.0846           2     0.0002           4   +0.0843   0.50  train: eval:✓ ok
+   250     adv_local  (not yet saved)
+
+   330    global(d2)     0.2836           0     0.0002           4   +0.2834   0.50  train: eval:✓ ok
+   330     adv_local     0.7913           0     0.3102           4   +0.4810   0.50  train:⚠ CROSS eval:✓ ok
+
+   400    global(d2)     0.2220           0     0.0001           2   +0.2219   0.50  train: eval:✓ ok
+   400     adv_local     0.3146           0     0.0000           6   +0.3146   0.50  train: eval:✓ ok
+
+
+Interpretation:
+  global train_s3 > rho AND global eval_s3 < rho  →  BN batch-stat noise confirmed
+  adv    train_s3 > rho AND adv    eval_s3 > rho  →  adversarial detection is real
+  delta = s3_train - s3_eval; large positive delta = train-mode BN inflates s3
+Done: ~/ffl_step5/step5_bn_mode_check.txt

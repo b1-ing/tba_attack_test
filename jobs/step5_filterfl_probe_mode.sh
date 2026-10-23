@@ -5,6 +5,7 @@
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
+#SBATCH --partition=gpuL
 #SBATCH --output=%x_%A_%a.out
 #SBATCH --exclude=node871,node877
 
@@ -27,6 +28,7 @@ TRIGGER=${TRIGGERS[$IDX]}
 
 echo "Array task $SLURM_ARRAY_TASK_ID: mode=$MODE trigger=$TRIGGER"
 
+SCRATCH=/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/scratch
 SCRATCH_DIR=$SCRATCH/step5_ffl_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}
 mkdir -p $SCRATCH_DIR
 OUT_DIR=$HOME/ffl_step5
@@ -118,7 +120,8 @@ TAG=filterfl_${MODE}_${TRIGGER}
 LOG=$OUT_DIR/step5_${TAG}.log
 
 cd $SCRATCH_DIR/FilterFL
-python3 main.py 2>&1 | tee $LOG
+mkdir -p saved_models
+python3 main.py --defense ours 2>&1 | tee $LOG
 
 # Extract per-epoch s3 and ASR from the log
 python3 - $LOG $OUT_DIR/step5_${TAG}.csv $MODE $TRIGGER <<'PYEOF'

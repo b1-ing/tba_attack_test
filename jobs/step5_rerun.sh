@@ -1,10 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=step5_rerun
-#SBATCH --array=1-15
+#SBATCH --array=1-16
 #SBATCH --time=48:00:00
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
+#SBATCH --partition=gpuL
 #SBATCH --output=%x_%A_%a.out
 #SBATCH --exclude=node871,node877
 
@@ -24,13 +25,14 @@
 #  10  flame      checker   0.5
 #  11  flame      cov64pos  0.5
 #  12  flame      patch     0.5
-#  13  fedavg     checker   100   (near-IID control)
-#  14  fedavg     cov64pos  100   (near-IID control)
-#  15  fedavg     patch     100   (near-IID control)
+#  13  fedavg     checker   100  (near-IID α=100 control)
+#  14  fltrust    checker   100  (near-IID α=100 control)
+#  15  foolsgold  checker   100  (near-IID α=100 control)
+#  16  flame      checker   100  (near-IID α=100 control)
 
-DEFENSES=(fedavg fedavg fedavg fltrust fltrust fltrust foolsgold foolsgold foolsgold flame flame flame fedavg fedavg fedavg)
-TRIGGERS=(checker cov64pos patch checker cov64pos patch checker cov64pos patch checker cov64pos patch checker cov64pos patch)
-ALPHAS=(0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 100 100 100)
+DEFENSES=(fedavg fedavg fedavg fltrust fltrust fltrust foolsgold foolsgold foolsgold flame flame flame fedavg fltrust foolsgold flame)
+TRIGGERS=(checker cov64pos patch checker cov64pos patch checker cov64pos patch checker cov64pos patch checker checker checker checker)
+ALPHAS=(0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 100 100 100 100)
 
 IDX=$(( SLURM_ARRAY_TASK_ID - 1 ))
 DEFENSE=${DEFENSES[$IDX]}
@@ -39,6 +41,7 @@ ALPHA=${ALPHAS[$IDX]}
 
 echo "Array task $SLURM_ARRAY_TASK_ID: defense=$DEFENSE trigger=$TRIGGER alpha=$ALPHA"
 
+SCRATCH=/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/scratch
 SCRATCH_DIR=$SCRATCH/step5_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}
 mkdir -p $SCRATCH_DIR
 
@@ -55,6 +58,11 @@ cd $REPO
 # Copy FilterFL code to scratch (avoid NFS contention)
 cp -r FilterFL $SCRATCH_DIR/
 cp -r jobs     $SCRATCH_DIR/
+
+# Stage CIFAR-10 to avoid 30-45min download
+mkdir -p $SCRATCH_DIR/FilterFL/data
+cp -r $HOME/filterfl_test/filterfl_test/data/cifar-10-batches-py \
+      $SCRATCH_DIR/FilterFL/data/ 2>/dev/null && echo "CIFAR-10 staged"
 
 cd $SCRATCH_DIR
 

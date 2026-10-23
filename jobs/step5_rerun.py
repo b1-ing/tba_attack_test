@@ -25,7 +25,10 @@ ap = argparse.ArgumentParser()
 ap.add_argument('--defense',       required=True,
                 choices=['fedavg', 'fltrust', 'foolsgold', 'flame'])
 ap.add_argument('--trigger',       required=True,
-                choices=['checker', 'cov64pos', 'patch'])
+                choices=['checker', 'checker_energy_matched', 'cov64pos', 'patch',
+                         'stripes', 'sin16', 'sin32', 'corner4x4',
+                         'corner4x4_energy_matched', 'eps4', 'eps8', 'noise',
+                         'gradient', 'sin_large'])
 ap.add_argument('--code-dir',      default='FilterFL')
 ap.add_argument('--warmup-dir',    default=None)
 ap.add_argument('--out',           default='.')
@@ -44,6 +47,10 @@ ap.add_argument('--root-per-class',type=int,   default=10)
 ap.add_argument('--lambda-flame',  type=float, default=0.001,
                 help='FLAME noise multiplier')
 ap.add_argument('--checkpoint-every', type=int, default=50)
+ap.add_argument('--save-at-rounds', type=str, default='',
+                help='Comma-separated rounds to save individual state files, e.g. 50,150,250,330,400')
+ap.add_argument('--benign', action='store_true',
+                help='Run with no poisoning (clean trajectory for H-test baseline)')
 args = ap.parse_args()
 
 code_dir = os.path.abspath(args.code_dir)
@@ -62,9 +69,11 @@ from hdbscan import HDBSCAN
 
 import main as ref_main
 import train as train_mod
+import trigger_utils as tu
 from handle import Handle
 from models.ResNet8 import ResNet8
 from device import device
+print(f'trigger_utils VERSION={tu.VERSION}', flush=True)
 
 with open('cifar_params.yaml') as f:
     params = yaml.load(f, Loader=yaml.FullLoader)
@@ -79,7 +88,10 @@ params['local_epochs']            = args.local_epochs
 params['lr']                      = args.lr
 params['momentum']                = args.momentum
 params['poison_rate']             = args.poison_rate
-params['is_poison']               = True
+params['is_poison']               = not args.benign
+# Trigger: train.py reads these; trigger_utils applies in raw [0,1] space
+params['trigger_type']            = args.trigger
+params['trigger_amplitude_raw']   = 0.1145    # ≈ 0.5 normalized; matches t1 checker baseline
 ref_main.seed(args.seed)
 
 handle = Handle(
@@ -117,52 +129,24 @@ all_imgs_gpu = all_imgs.to(device)
 all_lbls_gpu = all_lbls.to(device)
 non_target_gpu = all_imgs_gpu[all_lbls_gpu != TARGET]
 
-# ── Trigger patterns ──────────────────────────────────────────────────────────
-def _make_trigger():
-    if args.trigger == 'cov64pos':
-        rng = np.random.RandomState(42)
-        pos = rng.choice(H * W, size=64, replace=False)
-        pat = np.zeros((C, H, W), dtype=np.float32)
-        for p in pos:
-            h_p, w_p = divmod(int(p), W)
-            pat[:, h_p, w_p] = args.amplitude
-        return 'additive', pat
-    elif args.trigger == 'checker':
-        rows_c = np.arange(H).reshape(H, 1)
-        cols_c = np.arange(W).reshape(1, W)
-        hw = ((rows_c + cols_c) % 2).astype(np.float32) * 2.0 - 1.0
-        pat = np.stack([hw * args.amplitude] * C, axis=0)
-        return 'additive', pat
-    else:  # patch
-        _cpu = torch.device('cpu')
-        mask_t = train_mod.get_pattern_mask(params, 0, (C, H, W), _cpu)
-        return 'replacement', mask_t.numpy().astype(bool)
+# ── Trigger setup (trigger_utils, raw [0,1] space) ────────────────────────────
+_AMP_RAW = 0.1145
 
-trig_type, trig_data = _make_trigger()
-trig_t = torch.from_numpy(trig_data).to(device) if trig_type == 'additive' else None
-print(f'Trigger type={trig_type}', flush=True)
+if args.trigger == 'patch':
+    _delta_raw  = None
+    _patch_mask = tu.get_patch_mask(params.get('0_poison_pattern', []), device)
+else:
+    _delta_raw  = tu.make_raw_delta(args.trigger, amplitude=_AMP_RAW)
+    _patch_mask = None
+
+print(f'Trigger: {args.trigger}  amp_raw={_AMP_RAW}  trigger_utils v{tu.VERSION}', flush=True)
 
 def apply_trigger_images(images_gpu):
-    """Apply trigger to a batch of images. Returns triggered images."""
-    if trig_type == 'additive':
-        return torch.clamp(images_gpu + trig_t.unsqueeze(0), -1.0, 1.0)
-    else:  # replacement
-        mask_b = torch.from_numpy(trig_data).to(images_gpu.device).bool()
-        mask_b = mask_b.unsqueeze(0).expand_as(images_gpu)
-        return torch.where(mask_b, torch.tensor(1.0, device=images_gpu.device), images_gpu)
-
-def apply_trigger_batch(images, poison_mask):
-    """Patch train_mod.apply_pattern_batch_gpu for client training."""
-    pm_exp = poison_mask.view(-1, 1, 1, 1)
-    if trig_type == 'additive':
-        pat = trig_t.to(images.device)
-        poisoned = torch.clamp(images + pat.unsqueeze(0), -1.0, 1.0)
+    """Apply trigger to a batch of images for ASR evaluation (trigger_utils)."""
+    if args.trigger == 'patch':
+        return tu.apply_patch_norm(images_gpu, _patch_mask)
     else:
-        mask_b = torch.from_numpy(trig_data).to(images.device).bool()
-        mask_b = mask_b.unsqueeze(0).expand_as(images)
-        poisoned = torch.where(mask_b, torch.tensor(1.0, device=images.device), images)
-    labels = torch.full((images.size(0),), TARGET, device=images.device, dtype=torch.long)
-    return (torch.where(pm_exp.expand_as(images).bool(), poisoned, images), labels)
+        return tu.apply_additive_norm(images_gpu, _delta_raw)
 
 # ── Flatten helpers ───────────────────────────────────────────────────────────
 _BUFFER_SUFFIXES = ('running_mean', 'running_var', 'num_batches_tracked')
@@ -202,24 +186,28 @@ def reconstruct_state(ref_state, params_delta, kept_states_for_buffers=None):
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
 def compute_metrics(state):
-    """ASR, true clean_acc (full test set), non_target_tnr."""
+    """ASR, true clean_acc (eval set), non_target_tnr, clean_target_rate."""
     m = ResNet8(num_classes=N_CLASSES).to(device)
     m.load_state_dict({k: v.to(device) for k, v in state.items()})
     m.eval()
     with torch.no_grad():
-        # ASR: triggered non-target images → target class
-        trig_imgs = apply_trigger_images(non_target_gpu)
+        # ASR: triggered non-target eval images → target class
+        trig_imgs = apply_trigger_images(eval_non_target_gpu)
         asr = torch.softmax(m(trig_imgs), 1).mean(0)[TARGET].item()
 
-        # True clean_acc: correct-class accuracy on full test set
-        preds_all = torch.softmax(m(all_imgs_gpu), 1).argmax(1)
-        clean_acc = (preds_all == all_lbls_gpu).float().mean().item()
+        # True clean_acc: correct-class accuracy on eval set (root images excluded)
+        preds_eval = torch.softmax(m(eval_imgs_gpu), 1).argmax(1)
+        clean_acc = (preds_eval == eval_lbls_gpu).float().mean().item()
 
-        # non_target_tnr: fraction of non-target images not classified as target
-        preds_nt = preds_all[all_lbls_gpu != TARGET]
+        # non_target_tnr: fraction of non-target eval images not classified as target
+        preds_nt = preds_eval[eval_lbls_gpu != TARGET]
         non_target_tnr = (preds_nt != TARGET).float().mean().item()
 
-    return asr, clean_acc, non_target_tnr
+        # clean_target_rate: fraction of non-target eval images classified as target (no trigger).
+        # High early = model collapse; falls as clean_acc rises while ASR stays high = real backdoor.
+        clean_target_rate = 1.0 - non_target_tnr
+
+    return asr, clean_acc, non_target_tnr, clean_target_rate
 
 # ── Client training ───────────────────────────────────────────────────────────
 ADV_SET = set(handle.adversarial_namelist)
@@ -230,27 +218,17 @@ def train_client(state, client_id, round_seed):
     p = copy.deepcopy(params)
     p['poison_rate'] = args.poison_rate
 
-    import train as tm
-    _orig = tm.apply_pattern_batch_gpu
-    if is_adv:
-        def patched(images, pms, index, handle_, poison_mask,
-                    _fn=apply_trigger_batch):
-            return _fn(images, poison_mask)
-        tm.apply_pattern_batch_gpu = patched
-
     mod = ResNet8(num_classes=N_CLASSES).to(device)
     mod.load_state_dict({k: v.to(device) for k, v in state.items()})
-    try:
-        w_local = train_mod.standard_train(
-            epoch=1,
-            dataset_size=handle.clients_data_num[client_id],
-            client=client_id, params=p, model=mod,
-            dataset=handle.train_data[client_id], handle=handle,
-            poison=is_adv,
-        )
-    finally:
-        if is_adv:
-            tm.apply_pattern_batch_gpu = _orig
+    # No monkey-patch: train.py reads trigger_type/trigger_amplitude_raw from params
+    # and calls trigger_utils directly.
+    w_local = train_mod.standard_train(
+        epoch=1,
+        dataset_size=handle.clients_data_num[client_id],
+        client=client_id, params=p, model=mod,
+        dataset=handle.train_data[client_id], handle=handle,
+        poison=is_adv,
+    )
     return {k: v.cpu() for k, v in w_local.items()}
 
 # ── FedAvg ────────────────────────────────────────────────────────────────────
@@ -264,14 +242,26 @@ def fedavg_agg(state, local_states, client_ids, sizes):
 
 # ── FLTrust ───────────────────────────────────────────────────────────────────
 # Build root dataset once (10 images per class from test set)
+_root_indices = set()
 _root_imgs, _root_lbls = [], []
 for cls in range(N_CLASSES):
     idx = (all_lbls == cls).nonzero(as_tuple=True)[0][:args.root_per_class]
+    _root_indices.update(idx.tolist())
     _root_imgs.append(all_imgs[idx])
     _root_lbls.append(all_lbls[idx])
 root_imgs_gpu = torch.cat(_root_imgs).to(device)
 root_lbls_gpu = torch.cat(_root_lbls).to(device)
 print(f'Root dataset: {root_imgs_gpu.shape}', flush=True)
+
+# Exclude root images from evaluation (reviewer Step 2 correction).
+# Applies to all defenses for consistency; 100/10000 images, negligible for non-FLTrust.
+_eval_mask = torch.ones(len(all_lbls), dtype=torch.bool)
+for _i in _root_indices:
+    _eval_mask[_i] = False
+eval_imgs_gpu  = all_imgs_gpu[_eval_mask]
+eval_lbls_gpu  = all_lbls_gpu[_eval_mask]
+eval_non_target_gpu = eval_imgs_gpu[eval_lbls_gpu != TARGET]
+print(f'Eval set: {eval_imgs_gpu.shape[0]} images ({len(_root_indices)} root excluded)', flush=True)
 
 def fltrust_server_update(global_state):
     """Train server model on root dataset for local_epochs steps → Δw_s (params only)."""
@@ -451,9 +441,10 @@ def flame_agg(state, local_states, client_ids, sizes, lam, rng):
 # ── Main loop ─────────────────────────────────────────────────────────────────
 fg_obj = FoolsGold(handle.participants_list) if args.defense == 'foolsgold' else None
 rng_flame = np.random.RandomState(args.seed)
+_save_at_rounds = set(int(x) for x in args.save_at_rounds.split(',') if x.strip())
 
 COLS = ['defense', 'trigger', 'alpha', 'round', 'client', 'role',
-        'defense_score', 'asr', 'clean_acc', 'non_target_tnr',
+        'defense_score', 'asr', 'clean_acc', 'non_target_tnr', 'clean_target_rate',
         'norm_params', 'norm_buffers', 'excluded', 'S_t', 'sigma']
 all_rows = []
 
@@ -503,7 +494,7 @@ for rnd in range(start_round, args.n_rounds + 1):
                                               client_ids, sizes,
                                               args.lambda_flame, rng_flame)
 
-    asr, clean_acc, non_target_tnr = compute_metrics(global_state)
+    asr, clean_acc, non_target_tnr, clean_target_rate = compute_metrics(global_state)
 
     # Summarise ADV exclusion/score for console
     adv_in_round = [ci for ci in client_info if ci['role'] == 'ADV']
@@ -511,7 +502,8 @@ for rnd in range(start_round, args.n_rounds + 1):
     adv_score_m = np.mean([ci['defense_score'] for ci in adv_in_round]) if adv_in_round else float('nan')
     ben_score_m = np.mean([ci['defense_score'] for ci in ben_in_round]) if ben_in_round else float('nan')
     print(f'{rnd:>4}  ADV={adv_score_m:>5.3f}/BEN={ben_score_m:>5.3f}  '
-          f'{asr:>7.4f}  {clean_acc:>7.4f}  {non_target_tnr:>7.4f}', flush=True)
+          f'{asr:>7.4f}  {clean_acc:>7.4f}  {non_target_tnr:>7.4f}  ctr={clean_target_rate:.4f}',
+          flush=True)
 
     for ci in client_info:
         row = {
@@ -524,7 +516,8 @@ for rnd in range(start_round, args.n_rounds + 1):
             'defense_score': ci.get('defense_score', float('nan')),
             'asr':           asr,
             'clean_acc':     clean_acc,
-            'non_target_tnr': non_target_tnr,
+            'non_target_tnr':    non_target_tnr,
+            'clean_target_rate': clean_target_rate,
             'norm_params':   ci.get('norm_params', ''),
             'norm_buffers':  ci.get('norm_buffers', ''),
             'excluded':      ci.get('excluded', ''),
@@ -540,6 +533,11 @@ for rnd in range(start_round, args.n_rounds + 1):
         torch.save(ckpt_data, ckpt_out)
         print(f'  [checkpoint saved at round {rnd}]', flush=True)
 
+    if rnd in _save_at_rounds:
+        at_path = os.path.join(args.out, f'step5_{tag}_state_rnd{rnd:04d}.pt')
+        torch.save({'round': rnd, 'global_state': global_state}, at_path)
+        print(f'  [per-round state saved: {at_path}]', flush=True)
+
 # ── Final CSV ─────────────────────────────────────────────────────────────────
 csv_path = os.path.join(args.out, f'step5_{tag}.csv')
 with open(csv_path, 'w', newline='') as f:
@@ -552,8 +550,10 @@ last_100 = [r for r in all_rows if r['round'] > args.n_rounds - 100
             and r['client'] == client_ids[0]]
 asr_vals = [r['asr'] for r in last_100]
 acc_vals = [r['clean_acc'] for r in last_100]
+ctr_vals = [r['clean_target_rate'] for r in last_100]
 print(f'\n=== Final 100 rounds: ASR={np.mean(asr_vals):.4f}±{np.std(asr_vals):.4f}  '
-      f'clean_acc={np.mean(acc_vals):.4f}±{np.std(acc_vals):.4f} ===')
+      f'clean_acc={np.mean(acc_vals):.4f}±{np.std(acc_vals):.4f}  '
+      f'clean_target_rate={np.mean(ctr_vals):.4f}±{np.std(ctr_vals):.4f} ===')
 
 adv_rows = [r for r in all_rows if r['role'] == 'ADV' and r['round'] > args.n_rounds - 100]
 ben_rows = [r for r in all_rows if r['role'] == 'BEN' and r['round'] > args.n_rounds - 100]

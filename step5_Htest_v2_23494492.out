@@ -1,0 +1,28 @@
+step5_Htest_v2 job 23494492 on node875.csf3.man.alces.network
+Non-target test images: 9000  (classes 1-9)
+trigger_utils version: 1.3.0
+Device: cuda:0
+Probe shapes: checker=[9000, 3, 32, 32], patch=[9000, 3, 32, 32]
+
+  Rnd    Trigger    rr_adv    rr_cln       gap     margin        fa
+----------------------------------------------------------------------------
+    50    checker    1.0000    1.0000   +0.0000   +12.7506   +0.5600
+    50      patch    0.6587    0.0182   +0.6404    +1.9077   +0.2864
+
+   150    checker    1.0000    1.0000   +0.0000   +11.4062   +0.4381
+   150      patch    0.7082    0.0022   +0.7060    +1.7180   +0.2416
+
+   250    checker    1.0000    1.0000   +0.0000   +13.3302   +0.4537
+   250      patch    0.8839    0.0086   +0.8753    +6.0352   +0.3426
+
+   330    checker    1.0000    1.0000   +0.0000   +16.0640   +0.4235
+   330      patch    0.8783    0.0066   +0.8718    +6.5695   +0.3280
+
+   400    checker    1.0000    1.0000   +0.0000   +16.0146   +0.3912
+   400      patch    0.7739    0.0369   +0.7370    +3.1237   +0.2266
+
+Read-out (measured):
+  margin/fa decays checker, holds patch -> H supported (checker-specific)
+  both flat                             -> H not supported
+  rr saturated at 1.0 throughout       -> margin and fa carry the signal
+Done. Output: /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/Htest/step5_Htest_analysis_v2.txt

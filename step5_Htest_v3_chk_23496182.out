@@ -1,0 +1,21 @@
+step5_Htest_v3_checker job 23496182 on node881.csf3.man.alces.network
+Arm: checker  probe_dir: /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/probes_checker
+trigger_utils v1.3.0  device: cuda:0
+Frozen probe loaded: shape=[32, 3, 32, 32]  (ep=50, NOT re-optimised)
+
+  Rnd   s3 (frozen probe)        fa  note
+-------------------------------------------------------
+    50              0.0001   -0.2135  probe epoch
+   150              0.0000   -0.2551  
+   250              0.0000   -0.2646  
+   330              0.0000   -0.1684  
+   400              0.0000   -0.1508  
+
+Summary (checker):
+  s3  rnd50=0.0001  rnd400=0.0000  delta=-0.0001
+  fa  rnd50=-0.2135  rnd400=-0.1508  delta=+0.0626
+
+Read-out:
+  s3 falls toward rho (~0.2) with probe frozen -> H SUPPORTED: decay is model-driven
+  s3 flat                                      -> H not supported
+Done. Output: /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/step5_Htest_analysis_v3_checker.txt

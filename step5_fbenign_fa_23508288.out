@@ -1,0 +1,9 @@
+step5_fbenign_fa job 23508288 on node870.csf3.man.alces.network
+CIFAR-10 staged
+Traceback (most recent call last):
+  File "/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/tba_attack_test/jobs/step5_fbenign_fa.py", line 47, in <module>
+    from helper import Helper
+ModuleNotFoundError: No module named 'helper'
+Done.
+  CSV:  /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_check_fbenign/fbenign_fa.csv
+  Log:  /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_check_fbenign/step5_fbenign_fa.log
