@@ -1,0 +1,3 @@
+step5_lc2k job 23845800 arm 2 on node868.csf3.man.alces.network
+cap=0.012 rounds=2400 defense=ours
+FATAL: miniforge not mounted on node868.csf3.man.alces.network - add to --exclude

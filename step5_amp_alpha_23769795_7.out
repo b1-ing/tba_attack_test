@@ -1,0 +1,81 @@
+step5_amp_alpha task 7: trigger=checker alpha=0.1  job=23769795 on node880.csf3.man.alces.network
+CIFAR-10 staged
+yaml: trigger=checker alpha=0.1 ours_standard=[0.5,0.4,0.3,0.2]
+current path: saved_models/model_CIFAR10_Oct.25_17.18.48
+Loading data
+reading data done
+build_classes_dict done
+train loaders done
+get poison test loader
+load data done
+ResNet(
+  (conv1): Conv2d(3, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+  (bn1): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  (layer1): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (shortcut): Sequential()
+    )
+  )
+  (layer2): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(128, 256, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (shortcut): Sequential(
+        (0): Conv2d(128, 256, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      )
+    )
+  )
+  (layer3): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(256, 512, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): BatchNorm2d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): BatchNorm2d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (shortcut): Sequential(
+        (0): Conv2d(256, 512, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): BatchNorm2d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      )
+    )
+  )
+  (avgpool): AdaptiveAvgPool2d(output_size=(1, 1))
+  (linear1): Linear(in_features=512, out_features=10, bias=True)
+)
+create model done
+Poisoned following participants: [34, 50, 36, 99, 54, 60, 45, 47, 69, 84]
+Server Epoch:1 choose agents : [68, 88, 21, 24, 47, 13, 73, 46, 82, 55].
+/net/scratch/x77599jl/step5_amp_alpha_23769795_7/FilterFL/train.py:208: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler() if use_amp else None
+/net/scratch/x77599jl/step5_amp_alpha_23769795_7/FilterFL/train.py:264: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast():
+___Local_Train , g_epoch   1, l_epoch   1, local model 68,  Average loss: 2.2663, Accuracy: 71/233 (30.4721%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 68,  Average loss: 1.0073, Accuracy: 169/233 (72.5322%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 88,  Average loss: 2.4180, Accuracy: 1/28 (3.5714%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 88,  Average loss: 1.9458, Accuracy: 10/28 (35.7143%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 21,  Average loss: 1.8923, Accuracy: 155/345 (44.9275%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 21,  Average loss: 1.1205, Accuracy: 238/345 (68.9855%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 24,  Average loss: 1.6637, Accuracy: 372/676 (55.0296%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 24,  Average loss: 0.9368, Accuracy: 496/676 (73.3728%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 47,  Average loss: 1.1932, Accuracy: 628/1060 (59.2453%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 47,  Average loss: 0.5200, Accuracy: 873/1060 (82.3585%)
+___Local_Train , g_epoch   1, l_epoch   3, local model 47,  Average loss: 0.4800, Accuracy: 879/1060 (82.9245%)
+___Local_Train , g_epoch   1, l_epoch   4, local model 47,  Average loss: 0.4506, Accuracy: 890/1060 (83.9623%)
+___Local_Train , g_epoch   1, l_epoch   5, local model 47,  Average loss: 0.4570, Accuracy: 881/1060 (83.1132%)
+___Local_Train , g_epoch   1, l_epoch   6, local model 47,  Average loss: 0.4287, Accuracy: 891/1060 (84.0566%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 13,  Average loss: 1.6073, Accuracy: 340/679 (50.0736%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 13,  Average loss: 0.9647, Accuracy: 415/679 (61.1193%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 73,  Average loss: 2.2472, Accuracy: 55/173 (31.7919%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 73,  Average loss: 1.1167, Accuracy: 107/173 (61.8497%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 46,  Average loss: 0.9278, Accuracy: 529/676 (78.2544%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 46,  Average loss: 0.4213, Accuracy: 654/676 (96.7456%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 82,  Average loss: 2.0768, Accuracy: 86/249 (34.5382%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 82,  Average loss: 0.8383, Accuracy: 197/249 (79.1165%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 55,  Average loss: 1.8373, Accuracy: 149/347 (42.9395%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 55,  Average loss: 1.0735, Accuracy: 237/347 (68.2997%)
+[2026-10-25T17:19:05.679] error: *** JOB 23800807 ON node880 CANCELLED AT 2026-10-25T17:19:05 DUE to SIGNAL Terminated ***

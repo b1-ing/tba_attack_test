@@ -1,0 +1,3 @@
+step5_accum job 23845799 arm 4 on node868.csf3.man.alces.network
+FedAvg accumulation tracking: cap=5.000 tag=cap5p000
+FATAL: miniforge not mounted on node868.csf3.man.alces.network - add to --exclude

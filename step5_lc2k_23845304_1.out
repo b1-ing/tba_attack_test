@@ -1,0 +1,3 @@
+step5_lc2k job 23845311 arm 1 on node872.csf3.man.alces.network
+cap=0.012 rounds=2400 defense=None
+FATAL: numpy/torch not importable on node872.csf3.man.alces.network - add to --exclude

@@ -1,0 +1,3 @@
+step5_accum job 23846129 arm 2 on node887.csf3.man.alces.network
+FedAvg accumulation tracking: cap=0.057 tag=cap0p057
+FATAL: miniforge not mounted on node887.csf3.man.alces.network - add to --exclude

@@ -1,0 +1,22 @@
+Node: node869.csf3.man.alces.network
+Default python3: /usr/bin/python3
+Default python3 version: Python 3.9.25
+After activate python3: /usr/bin/python3
+After activate version: Python 3.9.25
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'numpy'
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'torch'
+PYTHONPATH=
+python/3.13.1  
+apps/binapps/anaconda3/2024.10       apps/gcc/samtools/1.11   
+apps/gcc/bcl2fastq/2.20              apps/python/macs2/2.2.5  
+apps/binapps/anaconda/2019.07                                            
+apps/binapps/anaconda3/4.2.0                                             
+apps/binapps/anaconda3/2019.03                                           
+apps/binapps/anaconda3/2019.07                                           
+apps/binapps/anaconda3/2019.07-broken-numpy                              
+apps/binapps/anaconda3/2019.07-numpy-fix                                 
+apps/binapps/anaconda3/2020.07                                           

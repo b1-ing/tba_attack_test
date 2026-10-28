@@ -1,0 +1,7 @@
+step5_suboverlap job 23767867 on node873.csf3.man.alces.network
+CIFAR-10 staged
+Traceback (most recent call last):
+  File "<stdin>", line 5, in <module>
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'SCRATCH_DIR'
+Patch failed — aborting

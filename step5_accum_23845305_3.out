@@ -1,0 +1,3 @@
+step5_accum job 23845314 arm 3 on node872.csf3.man.alces.network
+FedAvg accumulation tracking: cap=0.500 tag=cap0p500
+FATAL: numpy/torch not importable on node872.csf3.man.alces.network - add to --exclude

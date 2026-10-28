@@ -1,0 +1,116 @@
+step5_ntx job 23788035 array 4 on node876.csf3.man.alces.network
+defense=flame  cap=0.057  ntx_top_frac=0.8
+CIFAR-10 staged
+Neurotoxin patch applied: top_frac=0.8 target_norm=0.057
+yaml: defense=flame checker 600r cap=0.057 ntx_top_frac=0.8
+current path: saved_models/model_CIFAR10_Oct.24_23.09.03
+Loading data
+reading data done
+build_classes_dict done
+train loaders done
+get poison test loader
+load data done
+ResNet(
+  (conv1): Conv2d(3, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+  (bn1): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+  (layer1): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn1): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (conv2): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): BatchNorm2d(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (shortcut): Sequential()
+    )
+  )
+  (layer2): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(128, 256, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (conv2): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (shortcut): Sequential(
+        (0): Conv2d(128, 256, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): BatchNorm2d(256, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      )
+    )
+  )
+  (layer3): Sequential(
+    (0): BasicBlock(
+      (conv1): Conv2d(256, 512, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+      (bn1): BatchNorm2d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (conv2): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+      (bn2): BatchNorm2d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      (shortcut): Sequential(
+        (0): Conv2d(256, 512, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        (1): BatchNorm2d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+      )
+    )
+  )
+  (avgpool): AdaptiveAvgPool2d(output_size=(1, 1))
+  (linear1): Linear(in_features=512, out_features=10, bias=True)
+)
+create model done
+Poisoned following participants: [34, 50, 36, 99, 54, 60, 45, 47, 69, 84]
+Server Epoch:1 choose agents : [68, 88, 21, 24, 47, 13, 73, 46, 82, 55].
+/net/scratch/x77599jl/step5_ntx_23788035_4/FilterFL/train.py:208: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler() if use_amp else None
+/net/scratch/x77599jl/step5_ntx_23788035_4/FilterFL/train.py:264: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast():
+___Local_Train , g_epoch   1, l_epoch   1, local model 68,  Average loss: 2.2904, Accuracy: 91/416 (21.8750%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 68,  Average loss: 1.7471, Accuracy: 153/416 (36.7788%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 88,  Average loss: 2.0546, Accuracy: 131/447 (29.3065%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 88,  Average loss: 1.5319, Accuracy: 263/447 (58.8367%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 21,  Average loss: 2.2041, Accuracy: 58/262 (22.1374%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 21,  Average loss: 1.4740, Accuracy: 120/262 (45.8015%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 24,  Average loss: 2.3077, Accuracy: 51/320 (15.9375%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 24,  Average loss: 1.8378, Accuracy: 132/320 (41.2500%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 47,  Average loss: 1.7206, Accuracy: 273/654 (41.7431%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 47,  Average loss: 0.9218, Accuracy: 466/654 (71.2538%)
+___Local_Train , g_epoch   1, l_epoch   3, local model 47,  Average loss: 0.8738, Accuracy: 447/654 (68.3486%)
+___Local_Train , g_epoch   1, l_epoch   4, local model 47,  Average loss: 0.7970, Accuracy: 471/654 (72.0183%)
+___Local_Train , g_epoch   1, l_epoch   5, local model 47,  Average loss: 0.7822, Accuracy: 458/654 (70.0306%)
+___Local_Train , g_epoch   1, l_epoch   6, local model 47,  Average loss: 0.7465, Accuracy: 495/654 (75.6881%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 13,  Average loss: 1.9194, Accuracy: 252/620 (40.6452%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 13,  Average loss: 1.5385, Accuracy: 288/620 (46.4516%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 73,  Average loss: 1.7549, Accuracy: 251/500 (50.2000%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 73,  Average loss: 1.4474, Accuracy: 337/500 (67.4000%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 46,  Average loss: 2.0414, Accuracy: 159/601 (26.4559%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 46,  Average loss: 1.6053, Accuracy: 264/601 (43.9268%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 82,  Average loss: 1.8941, Accuracy: 230/601 (38.2696%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 82,  Average loss: 1.3833, Accuracy: 312/601 (51.9135%)
+___Local_Train , g_epoch   1, l_epoch   1, local model 55,  Average loss: 2.1918, Accuracy: 46/299 (15.3846%)
+___Local_Train , g_epoch   1, l_epoch   2, local model 55,  Average loss: 1.3085, Accuracy: 153/299 (51.1706%)
+Files already downloaded and verified
+Files already downloaded and verified
+Files already downloaded and verified
+Traceback (most recent call last):
+  File "/net/scratch/x77599jl/step5_ntx_23788035_4/FilterFL/main.py", line 45, in <module>
+    algorithm.FedAvg(handle)
+  File "/net/scratch/x77599jl/step5_ntx_23788035_4/FilterFL/algorithm.py", line 300, in FedAvg
+    w_locals[_ni][k] = (ori_weight[k] + _seg.to(ori_weight[k].dtype))
+                        ~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!
+
+Training done.
+Checkpoint load failed: [Errno 2] No such file or directory: '/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/step5_ntx_flame_0p057_final.pt'
+=== Neurotoxin: defense=flame  cap=0.057  top_frac=0.8  seed=1  checker ===
+Final ASR (raw):   N/A
+Final clean:       N/A
+Adv det rate:      0/0 = nan  (FilterFL)
+FP blocked:        0/0 = nan
+NTX norm info:     N/A
+FLAME clip info:   N/A
+FLTrust info:      N/A
+ASR every 100r:    
+
+No-selection baseline (same cap=0.057, same defense=flame):
+  cap=0.057 FilterFL: 100% ASR, det=0/617
+  cap=0.023 FilterFL:  97% ASR, det=0/617
+  cap=0.011 FilterFL:  52% ASR, det=0/617
+  cap=0.057 FLAME:    100% ASR, always_below_median=False (0.3% rounds above)
+  cap=0.057 FLTrust:  100% ASR
+
+Done.
+  Log:     /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/step5_ntx_flame_0p057.log
+  Net ASR: /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/step5_ntx_flame_0p057_netasr.txt
+  Summary: /mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/step5_ntx_flame_0p057_summary.txt
