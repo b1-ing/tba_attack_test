@@ -1,0 +1,1257 @@
+diff --git a/algorithm.py b/algorithm.py
+index 7cc07e3..d3d3e96 100644
+--- a/algorithm.py
++++ b/algorithm.py
+@@ -1,29 +1,240 @@
+ import copy
+ import logging
++import pickle
+ import random
+ import time
++import numpy as np
+ import torch
++import torch.nn.functional as F
+ import train
+ import test
+-from gan import gan_defense
++from gan import gan_defense, pixel_space_defense
++
++
++def _probe_defense(ori_w, new_w, params, epoch):
++    """Select probe generation method based on probe_mode param (default: GAN)."""
++    if params.get('probe_mode') == 'pixel':
++        return pixel_space_defense(ori_w, new_w, params, the_epoch=epoch)
++    return gan_defense(ori_w, new_w, params, the_epoch=epoch)
+ from models.ResNet8 import ResNet8
+ from device import device
+ logger = logging.getLogger("logger")
+ 
+ 
++def _penultimate_features(model, x):
++    """Penultimate-layer features for feat_align probing (same as check10)."""
++    out = torch.relu(model.bn1(model.conv1(x)))
++    out = model.layer1(out)
++    out = model.layer2(out)
++    out = model.layer3(out)
++    out = model.avgpool(out)
++    return torch.flatten(out, 1)
++
++
+ def get_clients(epoch, handle):
+     adversarial_name_keys = []
+     if handle.params['is_poison'] is True:
+         agent_name_keys = random.sample(handle.participants_list, handle.params['num_clients'])
++        # adversarial_whitelist: if set, only listed clients poison; others in adversarial_namelist
++        # train as benign. Models the adversary selecting which compromised clients to activate.
++        whitelist = set(handle.params.get('adversarial_whitelist', []))
+         for client in agent_name_keys:
+             if client in handle.adversarial_namelist:
+-                adversarial_name_keys.append(client)
++                if not whitelist or client in whitelist:
++                    adversarial_name_keys.append(client)
+     else:
+         agent_name_keys = random.sample(handle.benign_namelist, handle.params['num_clients'])
+     logger.info(f'Server Epoch:{epoch} choose agents : {agent_name_keys}.')
+     return agent_name_keys, adversarial_name_keys
+ 
+ 
++def _delta_norm(w, w_ori, keys):
++    return sum((w[k].float() - w_ori[k].float()).pow(2).sum().item() for k in keys) ** 0.5
++
++
++def flame_clip(w_locals, ori_weight, keys, logger, epoch):
++    """Simplified FLAME: clip each client delta to the median delta norm.
++    Omits noise and HDBSCAN clustering; captures the norm-clip defence property."""
++    norms = [_delta_norm(w, ori_weight, keys) for w in w_locals]
++    med = float(np.median(norms))
++    clipped = []
++    for w, n in zip(w_locals, norms):
++        if n > med and n > 0:
++            scale = med / n
++            w_c = {k: (ori_weight[k] + (w[k] - ori_weight[k]) * scale).to(w[k].dtype)
++                   if k in keys else w[k]
++                   for k in w}
++            clipped.append(w_c)
++        else:
++            clipped.append(w)
++    logger.info(f'FLAME ep={epoch} median_norm={med:.4f} '
++                f'norms=[{",".join(f"{n:.2f}" for n in norms)}]')
++    return clipped
++
++
++def flame_full_aggregate(w_ori, w_locals, agent_keys, adv_keys, params, epoch, logger, rng):
++    """Full faithful FLAME (USENIX Security 2022, Nguyen et al.).
++    All three components:
++      1. HDBSCAN cosine clustering — majority cluster only (min_cs = n//2+1).
++      2. Median L2 norm clip on kept deltas.
++      3. Gaussian noise N(0, (lambda*S_t)^2) per coordinate.
++    Uses sklearn.cluster.HDBSCAN (NumPy 2.x compatible).
++    lambda is read from params['flame_lambda'] (default 0.001, paper's setting).
++    Logs [FLAME_FULL] per round: labels, kept/excluded clients, adv status, S_t, sigma.
++    """
++    import warnings as _warnings
++    _warnings.filterwarnings('ignore')
++    from sklearn.cluster import HDBSCAN as _HDBSCAN
++
++    _BUF = ('running_mean', 'running_var', 'num_batches_tracked')
++    def _is_param(k):
++        return not any(k.endswith(s) for s in _BUF)
++
++    param_keys = [k for k in w_ori if _is_param(k)]
++
++    def _flat(w):
++        return np.concatenate([w[k].float().cpu().numpy().flatten() for k in param_keys])
++
++    n = len(w_locals)
++    g_flat = _flat(w_ori)
++    deltas = np.stack([_flat(w) - g_flat for w in w_locals])
++
++    # Component 1: HDBSCAN cosine clustering
++    norms = np.linalg.norm(deltas, axis=1, keepdims=True) + 1e-9
++    normed = deltas / norms
++    cos_dist = np.clip(1.0 - normed @ normed.T, 0.0, 2.0).astype(np.float64)
++    min_cs = max(2, n // 2 + 1)
++    try:
++        labels = _HDBSCAN(min_cluster_size=min_cs, metric='precomputed',
++                          allow_single_cluster=True).fit_predict(cos_dist)
++    except Exception as e:
++        logger.info(f'FLAME_FULL ep={epoch} HDBSCAN error keep_all: {e}')
++        labels = np.zeros(n, dtype=int)
++
++    if labels.max() >= 0:
++        unique, counts = np.unique(labels[labels >= 0], return_counts=True)
++        largest = unique[counts.argmax()]
++        keep = labels == largest
++    else:
++        keep = np.ones(n, dtype=bool)
++
++    kept_ids = [agent_keys[i] for i in range(n) if keep[i]]
++    excl_ids = [agent_keys[i] for i in range(n) if not keep[i]]
++    adv_set  = set(adv_keys)
++    logger.info('[FLAME_FULL] ep={} labels={} kept={} excl={} adv_kept={} adv_excl={}'.format(
++        epoch, labels.tolist(), kept_ids, excl_ids,
++        [c for c in kept_ids if c in adv_set],
++        [c for c in excl_ids if c in adv_set]))
++
++    # Component 2: Median norm clip
++    kept_deltas = deltas[keep]
++    kept_norms  = np.linalg.norm(kept_deltas, axis=1)
++    S_t = float(np.median(kept_norms))
++    clipped = np.stack([
++        d / max(1.0, float(np.linalg.norm(d)) / (S_t + 1e-9))
++        for d in kept_deltas
++    ])
++
++    # Component 3: Average + Gaussian noise
++    agg = clipped.mean(axis=0)
++    lam = float(params.get('flame_lambda', 0.001))
++    sigma = lam * S_t
++    if sigma > 0:
++        agg = agg + rng.normal(0.0, sigma, agg.shape).astype(np.float32)
++
++    logger.info('[FLAME_FULL] ep={} S_t={:.4f} sigma={:.6f} n_kept={}/{} lam={}'.format(
++        epoch, S_t, sigma, int(keep.sum()), n, lam))
++
++    # Reconstruct state dict
++    w_out = {}
++    offset = 0
++    kept_ws = [w_locals[i] for i in range(n) if keep[i]]
++    for k in w_ori:
++        if _is_param(k):
++            numel = w_ori[k].numel()
++            chunk = torch.from_numpy(
++                agg[offset:offset + numel].reshape(w_ori[k].shape).copy())
++            w_out[k] = (w_ori[k].float().cpu() + chunk).to(w_ori[k].dtype)
++            offset += numel
++        else:
++            w_out[k] = torch.stack(
++                [w[k].float().cpu() for w in kept_ws]).mean(0).to(w_ori[k].dtype)
++    return w_out
++
++
++def _load_root_data(root_path, device):
++    """Load server root dataset from a pickle file containing (x_np, y_np)."""
++    with open(root_path, 'rb') as f:
++        x_np, y_np = pickle.load(f)
++    x = torch.tensor(x_np, dtype=torch.float32, device=device)
++    y = torch.tensor(y_np, dtype=torch.long, device=device)
++    return x, y
++
++
++def fltrust_aggregate(w_ori, w_locals, root_x, root_y, params, epoch, dev, logger):
++    """FLTrust aggregation.
++    Server trains one local epoch on root data, then weights each client update
++    by relu(cosine_similarity(client_delta, server_delta)), normalising client
++    deltas to the server delta norm before summing."""
++    from models.ResNet8 import ResNet8
++    keys = [k for k in w_ori.keys() if w_ori[k].dtype != torch.int64]
++
++    # Server reference update on root data.
++    srv_model = ResNet8(num_classes=10).to(dev)
++    srv_model.load_state_dict({k: v.clone() for k, v in w_ori.items()})
++    srv_model.train()
++    optimizer = torch.optim.SGD(srv_model.parameters(),
++                                lr=params['lr'], momentum=params.get('momentum', 0.9))
++    criterion = torch.nn.CrossEntropyLoss()
++    for _ in range(params.get('fltrust_server_epochs', 2)):
++        optimizer.zero_grad()
++        loss = criterion(srv_model(root_x), root_y)
++        loss.backward()
++        optimizer.step()
++
++    w_srv = srv_model.state_dict()
++    srv_delta_flat = torch.cat(
++        [(w_srv[k].float() - w_ori[k].float()).flatten() for k in keys])
++    srv_norm = srv_delta_flat.norm().item()
++
++    if srv_norm < 1e-8:
++        logger.info(f'FLTrust ep={epoch}: server delta ~0, falling back to FedAvg')
++        w_out = {k: v.clone() for k, v in w_ori.items()}
++        for k in keys:
++            w_out[k] = w_ori[k] + torch.stack(
++                [(w[k].float() - w_ori[k].float()) for w in w_locals]).mean(0).to(w_ori[k].dtype)
++        return w_out
++
++    trust_scores = []
++    for w in w_locals:
++        cli_delta_flat = torch.cat(
++            [(w[k].float() - w_ori[k].float()).flatten() for k in keys])
++        cos = F.cosine_similarity(
++            cli_delta_flat.unsqueeze(0), srv_delta_flat.unsqueeze(0)).item()
++        trust_scores.append(max(0.0, cos))
++
++    ts_sum = sum(trust_scores)
++    logger.info(f'FLTrust ep={epoch} srv_norm={srv_norm:.4f} '
++                f'trust=[{",".join(f"{t:.3f}" for t in trust_scores)}] sum={ts_sum:.4f}')
++
++    w_out = {k: v.clone() for k, v in w_ori.items()}
++    if ts_sum < 1e-8:
++        return w_out  # all clients distrusted — keep global model
++
++    for k in keys:
++        agg = torch.zeros_like(w_ori[k].float())
++        for w, ts in zip(w_locals, trust_scores):
++            if ts <= 0:
++                continue
++            cli_delta = (w[k].float() - w_ori[k].float())
++            cli_norm = _delta_norm(w, w_ori, keys)
++            # normalise client delta to server norm then weight by trust score
++            scale = (srv_norm / cli_norm) if cli_norm > 1e-8 else 0.0
++            agg += ts * cli_delta * scale
++        w_out[k] = (w_ori[k].float() + params['eta'] * agg / ts_sum).to(w_ori[k].dtype)
++    return w_out
++
++
+ def Aggregation(w_ori, w_list, lens, beta, eta, defence_method, params):
+     """优化聚合函数，使用向量化操作减少循环"""
+     # 预计算所有键，避免在循环中重复获取
+@@ -56,7 +267,19 @@ def FedAvg(handle):
+     count_all_attack = 0
+     count_correct_defense = 0
+     count_all_defense = 0
+-    
++
++    # Pre-load root dataset for FLTrust once.
++    _root_x = _root_y = None
++    if handle.params.get('defence_method') == 'fltrust':
++        root_path = handle.params.get('fltrust_root_path')
++        if root_path is None:
++            raise ValueError('fltrust_root_path must be set in params for FLTrust')
++        _root_x, _root_y = _load_root_data(root_path, device)
++
++    # Persistent RNG for FLAME noise (seeded once per run for reproducibility).
++    _flame_rng = np.random.RandomState(handle.params.get('seed', 0)) \
++        if handle.params.get('defence_method') == 'flame_full' else None
++
+     # 预加载模型到设备，避免重复操作
+     handle.model.to(device)
+     
+@@ -74,33 +297,102 @@ def FedAvg(handle):
+         beta = [1] * lens
+         ori_weight = handle.model.state_dict()
+         w_locals = []
+-        
++
++        # [ADDED] Best-of-N evasion: adversarial clients train bon_k times and
++        # submit the update with the lowest self-measured Stage-3 score.
++        # bon_k=1 (default) is identical to the original single-trial behaviour.
++        bon_k = int(handle.params.get('bon_k', 1))
++        bon_gan_seed = int(handle.params.get('bon_gan_seed', 42))
++        # [END ADDED]
++
+         # 使用列表推导式预分配空间
+         for client in agent_name_keys:
+             is_poison = client in adversarial_name_keys
+-            # 使用模型副本而不是深度拷贝
+-            model_copy = copy.deepcopy(handle.model)
+-            w = train.standard_train(epoch, handle.clients_data_num[client], client, handle.params,
+-                                     model_copy.to(device),
+-                                     handle.train_data[client], handle, poison=is_poison)
+-            w_locals.append(w)
++
++            # [ADDED] Best-of-N selection for adversarial clients.
++            if is_poison and bon_k > 1:
++                rho = handle.params['ours_standard'][(epoch - 1) // 500]
++                trials = []
++                for t in range(bon_k):
++                    t_seed = epoch * 100000 + agent_name_keys.index(client) * 1000 + t
++                    torch.manual_seed(t_seed)
++                    np.random.seed(t_seed)
++                    model_t = ResNet8(num_classes=10).to(device)
++                    model_t.load_state_dict(copy.deepcopy(ori_weight))
++                    w_t = train.standard_train(epoch, handle.clients_data_num[client], client,
++                                               handle.params, model_t,
++                                               handle.train_data[client], handle, poison=True)
++                    # Self-measured Stage-3 (attacker's estimate using current global model)
++                    torch.manual_seed(bon_gan_seed)
++                    np.random.seed(bon_gan_seed)
++                    g_self = _probe_defense(ori_weight, w_t, handle.params, epoch)
++                    m_self = ResNet8(num_classes=10).to(device)
++                    m_self.load_state_dict(w_t)
++                    m_self.eval()
++                    with torch.no_grad():
++                        s3_self = torch.softmax(m_self(g_self[0]), dim=1).mean(0)[handle.target].item()
++                    trials.append((s3_self, w_t))
++                trials.sort(key=lambda x: x[0])
++                n_below = sum(1 for s3, _ in trials if s3 < rho)
++                selected_s3, w_best = trials[0]
++                w_locals.append(w_best)
++                logger.info(f'BON client {client} epoch {epoch}: '
++                            f'selected_s3={selected_s3:.4f} n_below_rho={n_below}/{bon_k} rho={rho:.3f}')
++            # [END ADDED]
++            else:
++                # 使用模型副本而不是深度拷贝
++                model_copy = copy.deepcopy(handle.model)
++                w = train.standard_train(epoch, handle.clients_data_num[client], client, handle.params,
++                                         model_copy.to(device),
++                                         handle.train_data[client], handle, poison=is_poison)
++                w_locals.append(w)
+         
+-        # 减少深度拷贝
+-        w_glob = Aggregation({k: v.clone() for k, v in ori_weight.items()}, 
+-                            w_locals, lens, beta, handle.params['eta'],
+-                            handle.params['defence_method'], handle.params)
++        # ── FLAME / FLTrust aggregation (replaces / wraps standard Aggregation) ──
++        _def = handle.params.get('defence_method', 'None')
++        _keys = [k for k in ori_weight.keys() if ori_weight[k].dtype != torch.int64]
++
++        if _def == 'flame':
++            w_locals = flame_clip(w_locals, ori_weight, _keys, logger, epoch)
++
++        if _def == 'fltrust':
++            w_glob = fltrust_aggregate(
++                {k: v.clone() for k, v in ori_weight.items()},
++                w_locals, _root_x, _root_y, handle.params, epoch, device, logger)
++        elif _def == 'flame_full':
++            w_glob = flame_full_aggregate(
++                {k: v.clone() for k, v in ori_weight.items()},
++                w_locals, agent_name_keys, adversarial_name_keys,
++                handle.params, epoch, logger, _flame_rng)
++        else:
++            w_glob = Aggregation({k: v.clone() for k, v in ori_weight.items()},
++                                 w_locals, lens, beta, handle.params['eta'],
++                                 _def, handle.params)
+ 
+         if handle.params['defence_method'] == 'ours':
+             standard = handle.params['ours_standard'][(epoch - 1) // 500]
+-            g_imgs = gan_defense(ori_weight, w_glob, handle.params, the_epoch=epoch)
+-            
++            g_imgs = _probe_defense(ori_weight, w_glob, handle.params, epoch)
++
++            # Log global-model feat_align: cos(probe_features_global, W_fc[target]_global).
++            # Captures the H1 effect (benign training shifting the natural class-0 direction)
++            # independently of whether any adversarial updates landed this round.
++            _global_m = ResNet8(num_classes=10).to(device)
++            _global_m.load_state_dict(ori_weight)
++            with torch.no_grad():
++                _gf = _penultimate_features(_global_m, g_imgs[0]).mean(0)
++                _W  = ori_weight['linear1.weight'][handle.target]
++                _gfa = torch.nn.functional.cosine_similarity(
++                    _gf.unsqueeze(0), _W.unsqueeze(0)).item()
++            logger.info('GLOBAL_FA ep={} fa={:.4f} rho={:.2f}'.format(
++                epoch, _gfa, standard))
++
+             # 预加载模型到设备
+             ResNet8_model = ResNet8(num_classes=10).to(device)
+             
++            _adv_local_saved = set()   # track which save-epochs have been written this round
+             for i in range(handle.params['num_clients']):
+                 if beta[i] == 0:
+                     continue
+-                
++
+                 # 减少深度拷贝
+                 parameter = {}
+                 for k in w_locals[i].keys():
+@@ -108,15 +400,48 @@ def FedAvg(handle):
+                         parameter[k] = (w_locals[i][k] - ori_weight[k]) * beta[i] + ori_weight[k]
+                     else:
+                         parameter[k] = w_locals[i][k]
+-                
++
+                 ResNet8_model.load_state_dict(parameter)
+-                
++
+                 with torch.no_grad():
+                     out = torch.softmax(ResNet8_model(g_imgs[0]), dim=1)
+                     out = torch.mean(out, dim=0)
+                     out_val, out_n = torch.max(out, dim=0)
+                     logger.info('{}, {}, {}'.format(agent_name_keys[i], out_n, out_val))
+-                    
++
++                    # Log feat_align for adversarial clients to trace the evasion mechanism.
++                    if agent_name_keys[i] in adversarial_name_keys:
++                        feats = _penultimate_features(ResNet8_model, g_imgs[0])
++                        mean_feat = feats.mean(0)
++                        W_t = parameter['linear1.weight'][handle.target]
++                        fa = torch.nn.functional.cosine_similarity(
++                            mean_feat.unsqueeze(0), W_t.unsqueeze(0)).item()
++                        logger.info('FEAT_ALIGN ep={} client={} fa={:.4f} s3={:.4f}'.format(
++                            epoch, agent_name_keys[i], fa, out_val.item()))
++
++                        # Save adversarial client's local model at probe-save epochs.
++                        # This is the model FilterFL Stage 3 actually evaluates (w_locals[i]).
++                        _save_epset = set(handle.params.get('probe_save_epochs', []))
++                        if epoch in _save_epset and epoch not in _adv_local_saved:
++                            import os as _os
++                            _sdir = handle.params.get('probe_save_dir', '.')
++                            _os.makedirs(_sdir, exist_ok=True)
++                            _sp = _os.path.join(_sdir, f'adv_local_ep{epoch:04d}.pt')
++                            torch.save(w_locals[i], _sp)
++                            _adv_local_saved.add(epoch)
++                            logger.info('ADV_LOCAL_SAVED ep={} client={} path={}'.format(
++                                epoch, agent_name_keys[i], _sp))
++
++                    # [ADDED] Log s3 + feat_align for benign clients when log_ben_s3=True.
++                    elif handle.params.get('log_ben_s3', False):
++                        feats = _penultimate_features(ResNet8_model, g_imgs[0])
++                        mean_feat = feats.mean(0)
++                        W_t = parameter['linear1.weight'][handle.target]
++                        fa = torch.nn.functional.cosine_similarity(
++                            mean_feat.unsqueeze(0), W_t.unsqueeze(0)).item()
++                        logger.info('FEAT_ALIGN_BEN ep={} client={} fa={:.4f} s3={:.4f}'.format(
++                            epoch, agent_name_keys[i], fa, out_val.item()))
++
+                     if standard < out_val and out_n == 0:
+                         beta[i] = 0
+             
+@@ -133,9 +458,9 @@ def FedAvg(handle):
+                 count_all_attack, count_all_defense, count_correct_defense))
+             
+             if sum(beta) != 0:
+-                w_glob = Aggregation({k: v.clone() for k, v in ori_weight.items()}, 
+-                                    w_locals, lens, beta, handle.params['eta'],
+-                                    handle.params['defence_method'], handle.params)
++                w_glob = Aggregation({k: v.clone() for k, v in ori_weight.items()},
++                                     w_locals, lens, beta, handle.params['eta'],
++                                     _def, handle.params)
+             else:
+                 w_glob = ori_weight
+         
+diff --git a/cifar_params.yaml b/cifar_params.yaml
+index 076104c..d565560 100644
+--- a/cifar_params.yaml
++++ b/cifar_params.yaml
+@@ -1,38 +1,64 @@
+----
+-
+-#fed
+-type: CIFAR10
++0_poison_pattern:
++- - 0
++  - 0
++- - 0
++  - 1
++- - 0
++  - 2
++- - 0
++  - 3
++- - 0
++  - 6
++- - 0
++  - 7
++- - 0
++  - 8
++- - 0
++  - 9
++- - 3
++  - 0
++- - 3
++  - 1
++- - 3
++  - 2
++- - 3
++  - 3
++- - 3
++  - 6
++- - 3
++  - 7
++- - 3
++  - 8
++- - 3
++  - 9
+ algorithm: FedAvg
+-epochs: 2000
++batch_size: 128
++decay: 0.0005
++defence_method: ours
++dirichlet_alpha: 1
++epochs: 600
+ eta: 1
++is_poison: true
+ local_epochs: 2
+-batch_size: 128
+-num_clients: 10
+-number_of_total_participants: 100
+ lr: 0.01
+-lr_decay: True
++lr_decay: true
+ lr_decay_epoch: 1
+ lr_decay_gamma: 0.998
+ momentum: 0.9
+-decay: 0.0005
+-
+-#non-iid
+-sampling_dirichlet: True
+-dirichlet_alpha: 1
+-
+-#poison
+-is_poison: True
++num_clients: 10
++number_of_total_participants: 100
++ours_standard:
++- 0.5
++- 0.4
++- 0.3
++- 0.2
++poison_client_num: 10
+ poison_epochs: 6
+ poison_lr: 0.005
+ poison_rate: 0.5
+-# -1 means None
+-
+-trigger_num: 1
+-poison_client_num: 10
+-0_poison_pattern: [[0, 0], [0, 1], [0, 2], [0, 3], [0, 6], [0, 7], [0, 8], [0, 9], [3, 0], [3, 1], [3, 2], [3, 3], [3, 6], [3, 7], [3, 8], [3, 9]]
+-#defence
+-defence_method: ours
+-ours_standard: [0.50, 0.40, 0.30, 0.20]
+-
+-#seed
++sampling_dirichlet: true
+ seed: 1
++trigger_amplitude: 0.5
++trigger_num: 1
++trigger_type: cov64pos
++type: CIFAR10
+diff --git a/gan.py b/gan.py
+index e5571f3..7460d6d 100644
+--- a/gan.py
++++ b/gan.py
+@@ -87,8 +87,8 @@ def gan_defense(d1, d2, params, the_epoch):
+     discriminator1 = ResNet8(num_classes=classnum)
+     discriminator2 = ResNet8(num_classes=classnum)
+     dims = 3
+-    n_epochs1 = 10
+-    n_epochs2 = 5
++    n_epochs1 = params.get('gan_epochs1', 10)  # generator steps per class image set (reference: 10)
++    n_epochs2 = params.get('gan_epochs2', 5)  # trigger generator steps (reference: 5)
+     generator = Generator_CIFAR()
+ 
+     discriminator1.load_state_dict(d1)
+@@ -187,4 +187,116 @@ def gan_defense(d1, d2, params, the_epoch):
+         with torch.no_grad():
+             imgs = generator(z)
+             tri_imgs.append(imgs.repeat([1, dims, 1, 1]))
+-    return tri_imgs
++    # n_epochs2=0 means skip Stage 2: fall back to Stage 1 class-0 images as probe
++    return tri_imgs if tri_imgs else ori_imgs
++
++
++def pixel_space_defense(d1, d2, params, the_epoch):
++    """Pixel-space replacement for gan_defense: same Stage 1/2 loss, no GAN generator.
++
++    Stage 1: optimise image_num images per class directly in raw [0,1] pixel space,
++             then ImageNet-normalise before discriminator forward passes.
++    Stage 2: optimise a 1-channel trigger delta (unconstrained, broadcast to 3ch)
++             in the same normalised domain; same loss terms as gan_defense Stage 2.
++    Returns: list of (image_num, 3, 32, 32) probe tensors in ImageNet-normalised space.
++    No architectural frequency bias — probes can contain any spatial frequency.
++    """
++    lr_s1   = 0.02
++    lr_s2   = 0.01
++    classnum = 10
++    dims    = 3
++    image_num = 32
++    Alpha   = 0.75
++    n_epochs1 = params.get('pixel_probe_epochs1', 50)
++    n_epochs2 = params.get('pixel_probe_epochs2', 25)
++
++    MEAN_T = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
++    STD_T  = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
++
++    def normalize(x):
++        return (x - MEAN_T) / STD_T
++
++    discriminator1 = ResNet8(num_classes=classnum).to(device)
++    discriminator2 = ResNet8(num_classes=classnum).to(device)
++    discriminator1.load_state_dict(d1)
++    discriminator2.load_state_dict(d2)
++    discriminator1.eval()
++    discriminator2.eval()
++
++    # Stage 1: per-class image optimisation in raw [0,1]
++    ori_imgs = []
++    for c in range(classnum):
++        x = torch.rand(image_num, dims, 32, 32, device=device).clamp(0.0, 1.0)
++        x.requires_grad_(True)
++        opt = torch.optim.Adam([x], lr=lr_s1)
++        best_loss, best_xn = float('inf'), None
++        for _ in range(n_epochs1):
++            opt.zero_grad()
++            xn = normalize(x.clamp(0.0, 1.0))
++            out1 = torch.softmax(discriminator1(xn), dim=1).std(dim=1).mean()
++            out2 = torch.softmax(discriminator2(xn), dim=1)[:, c].mean()
++            loss = Alpha * out1 + (1.0 - Alpha) * (1.0 - out2)
++            loss.backward()
++            opt.step()
++            with torch.no_grad():
++                x.clamp_(0.0, 1.0)
++            if loss.item() < best_loss:
++                best_loss = loss.item()
++                best_xn = normalize(x.detach().clamp(0.0, 1.0))
++        ori_imgs.append(best_xn if best_xn is not None
++                        else normalize(x.detach().clamp(0.0, 1.0)))
++
++    # Stage 2: trigger optimisation in normalised input space
++    tri_imgs = []
++    if n_epochs2 > 0:
++        other_imgs = torch.cat(ori_imgs[1:]).detach()   # classes 1-9, normalised
++        this_imgs  = ori_imgs[0].detach()               # class 0, normalised
++
++        # 1-channel unconstrained delta, broadcast to 3ch (mirrors GAN's 1-ch trigger)
++        t = torch.zeros(image_num, 1, 32, 32, device=device, requires_grad=True)
++        opt_t = torch.optim.Adam([t], lr=lr_s2)
++        best_loss_t, best_probe = float('inf'), None
++
++        for ep in range(n_epochs2):
++            opt_t.zero_grad()
++            trigger_3ch = t.repeat(1, dims, 1, 1)   # (N, 3, 32, 32)
++
++            # Term A: non-target + trigger → class-0 / uncertain on old model
++            tiled = trigger_3ch.repeat(classnum - 1, 1, 1, 1)[:other_imgs.size(0)]
++            comp_a = other_imgs + tiled
++            oa1 = torch.softmax(discriminator1(comp_a), dim=1).std(dim=1).mean()
++            oa2 = torch.softmax(discriminator2(comp_a), dim=1).mean(0)[0]
++            g_loss = 0.75 * oa1 + 0.25 * (1.0 - oa2)
++
++            # Term B: target - trigger → uncertain / class-0; trigger alone → class-0
++            comp_b = this_imgs - trigger_3ch
++            ob1 = torch.softmax(discriminator1(comp_b), dim=1).std(dim=1).mean()
++            ob2 = torch.softmax(discriminator2(comp_b), dim=1).mean(0)[0]
++            ob3 = torch.softmax(discriminator1(trigger_3ch), dim=1).mean(0)[0]
++            g_loss = g_loss + 0.75 * ob1 + 0.25 * ob2 + 0.25 * ob3
++
++            g_loss.backward()
++            opt_t.step()
++
++            if g_loss.item() < best_loss_t:
++                best_loss_t = g_loss.item()
++                best_probe  = trigger_3ch.detach().clone()
++
++        probe = best_probe if best_probe is not None else trigger_3ch.detach()
++        tri_imgs.append(probe)
++
++    # Optionally save probe batch and model states at specified rounds for spectrum analysis.
++    save_epochs = params.get('probe_save_epochs', [])
++    if the_epoch in save_epochs:
++        import os
++        save_dir = params.get('probe_save_dir', '.')
++        os.makedirs(save_dir, exist_ok=True)
++        probes = (tri_imgs if tri_imgs else ori_imgs)[0]
++        torch.save(probes.cpu(),
++                   os.path.join(save_dir, f'pixel_probe_ep{the_epoch:04d}.pt'))
++        torch.save({'d1': d1, 'd2': d2},
++                   os.path.join(save_dir, f'model_ep{the_epoch:04d}.pt'))
++        logger.info('PROBE_SAVED ep={} shape={} dir={}'.format(
++            the_epoch, list(probes.shape), save_dir))
++
++    return tri_imgs if tri_imgs else ori_imgs
+diff --git a/test.py b/test.py
+index 73682b7..c86e993 100644
+--- a/test.py
++++ b/test.py
+@@ -5,30 +5,47 @@ import main
+ from device import device
+ logger = logging.getLogger("logger")
+ 
++_eval_trigger_cache = {}
++
+ 
+ def add_pixel_pattern(ori_image, params, handle):
+-    """优化像素模式添加函数，减少拷贝操作"""
+-    image = ori_image.clone()  # 使用clone替代deepcopy
+-    
+-    # 预计算所有毒模式
++    """Apply the configured trigger to a single image for ASR evaluation.
++
++    'patch' / 'inverted': pixel-pattern coordinate replacement.
++    All other types (checker, noise, blend_87, stripes, low_col_opt, …):
++        additive triggers via make_raw_delta, using trigger_amplitude_raw
++        (matching the training amplitude exactly).
++    """
++    trigger_type = params.get('trigger_type', 'patch')
++
++    if trigger_type not in ('patch', 'inverted'):
++        from trigger_utils import make_raw_delta, apply_additive_norm
++        amplitude = float(params.get('trigger_amplitude_raw', 0.1145))
++        seed      = int(params.get('trigger_noise_seed', 42))
++        key = f"{trigger_type}_{ori_image.shape}_{amplitude}_{seed}"
++        if key not in _eval_trigger_cache:
++            delta_np = make_raw_delta(trigger_type, amplitude=amplitude, seed=seed)
++            _eval_trigger_cache[key] = delta_np
++        image = apply_additive_norm(ori_image.unsqueeze(0),
++                                    _eval_trigger_cache[key]).squeeze(0)
++        return image, handle.target
++
++    # patch / inverted: replace pixel-pattern positions
++    image = ori_image.clone()
+     poison_patterns = []
+     for index in range(params['trigger_num']):
+         pattern_key = f'{index}_poison_pattern'
+         if pattern_key in params:
+             poison_patterns.extend(params[pattern_key])
+-    
+     if not poison_patterns:
+         return image, handle.target
+-    
+-    # 批量处理像素模式
++    val = 0.0 if trigger_type == 'inverted' else 1.0
+     if params['type'] != 'MNIST':
+         for pos in poison_patterns:
+-            # 一次性设置所有通道
+-            image[:, pos[0], pos[1]] = 1
++            image[:, pos[0], pos[1]] = val
+     else:
+         for pos in poison_patterns:
+-            image[0, pos[0], pos[1]] = 1
+-    
++            image[0, pos[0], pos[1]] = val
+     return image, handle.target
+ 
+ 
+@@ -38,13 +55,12 @@ def normal_test(model, data_loader, params, handle, poison=False):
+     test_loss = 0.0
+     correct = 0
+     data_num = 0
+-    
++
+     with torch.no_grad():
+         for data, target in data_loader:
+             batch_size = len(target)
+-            
++
+             if poison:
+-                # 批量处理投毒
+                 for i in range(batch_size):
+                     data[i], target[i] = add_pixel_pattern(data[i], params, handle)
+             
+diff --git a/train.py b/train.py
+index 35680fe..623fc8d 100644
+--- a/train.py
++++ b/train.py
+@@ -2,12 +2,16 @@ import logging
+ import torch
+ from torch import nn
+ from device import device  # 你的 device 定义（例如 torch.device("cuda") / cpu）
++from trigger_utils import (make_raw_delta, apply_additive_norm,
++                            apply_patch_norm, get_patch_mask, VERSION as _TU_VERSION)
+ logger = logging.getLogger("logger")
++logger.info(f'trigger_utils VERSION={_TU_VERSION}')
+ 
+ # 预计算毒化模式mask，避免重复计算
+-# 注意：现在缓存的 mask 会和生成它的 device 绑定（key 包含 device），
+-# 以避免频繁在 CPU/GPU 之间拷贝。
+ _pattern_masks = {}
++_additive_triggers = {}  # legacy cache — kept for any code that still calls get_pattern_mask
++_raw_deltas  = {}        # cache: (trigger_type, amplitude_raw, seed) → numpy array
++_patch_masks = {}        # cache: index_key → (C,H,W) bool tensor on device
+ 
+ def get_pattern_mask(params, index, image_shape, dev):
+     """
+@@ -40,37 +44,73 @@ def get_pattern_mask(params, index, image_shape, dev):
+     return mask
+ 
+ 
++def _get_additive_trigger(trigger_type, params, image_shape, dev):
++    """Compute (or retrieve from cache) a (C,H,W) additive trigger pattern."""
++    amplitude = float(params.get('trigger_amplitude', 0.5))
++    key = f"{trigger_type}_{image_shape}_{str(dev)}_{amplitude}"
++    if key in _additive_triggers:
++        return _additive_triggers[key]
++
++    C, H, W = image_shape
++    if trigger_type == 'checker':
++        # Alternating ±amplitude at every pixel (pixel-level checkerboard), all channels.
++        # This lives at the Nyquist frequency — far from smooth class-0 natural features.
++        row_idx = torch.arange(H, device=dev).view(H, 1).expand(H, W)
++        col_idx = torch.arange(W, device=dev).view(1, W).expand(H, W)
++        checker = ((row_idx + col_idx) % 2).float() * 2.0 - 1.0  # ±1 at each pixel
++        pattern = checker.unsqueeze(0).expand(C, H, W) * amplitude  # (C, H, W)
++    elif trigger_type == 'noise':
++        # Fixed-seed additive random noise, L∞-normalised to amplitude.
++        gen = torch.Generator(device='cpu')
++        gen.manual_seed(int(params.get('trigger_noise_seed', 12345)))
++        noise = torch.rand(C, H, W, generator=gen) * 2.0 - 1.0  # uniform ±1 on CPU
++        noise = noise / (noise.abs().max() + 1e-9) * amplitude
++        pattern = noise.to(dev)
++    else:
++        raise ValueError(f"Unknown additive trigger_type: {trigger_type!r}")
++
++    _additive_triggers[key] = pattern
++    return pattern
++
++
+ def apply_pattern_batch_gpu(images, params, index, handle, poison_mask):
+-    """
+-    在 GPU 上对整个 batch(images) 应用毒化 pattern。
+-    images: tensor (N,C,H,W) 已经在目标 device 上
+-    poison_mask: bool tensor (N,) 在同一 device 上，表示哪些 sample 要被毒化
+-    返回: (images_after, labels_tensor_for_poisoned)  - 都在相同 device 上
++    """Apply backdoor trigger via trigger_utils (raw [0,1] space, clamp to [0,1]).
++
++    trigger_type (params['trigger_type'], default 'patch'):
++      'patch'    — replace pixels with raw 1.0 (white)
++      'inverted' — replace pixels with raw 0.0 (black)
++      'checker'  — additive ±amplitude_raw checkerboard
++      'cov64pos' — additive ±amplitude_raw at 64 random positions
++      'eps4'/'eps8'/'eps16'/'eps32'/'eps64' — additive checkerboard at exactly N/255 raw
++      'noise'    — additive ±amplitude_raw fixed-seed noise
++
++    Amplitude: params['trigger_amplitude_raw'] (default 0.1145, raw [0,1] space).
+     """
+     if images.size(0) == 0:
+         return images, torch.full((0,), handle.target, device=images.device, dtype=torch.long)
+ 
+     dev = images.device
+-    # 获取单样本 pattern mask (C,H,W) 已经在 dev 上
+-    pattern_mask = get_pattern_mask(params, index, images[0].shape, dev)  # uint8
+-    # 扩展到 batch
+-    # pattern_mask: (C,H,W) -> (1,C,H,W) -> expand to (N,C,H,W)
+-    batch_pattern_mask = pattern_mask.unsqueeze(0).expand(images.size(0), -1, -1, -1).bool()
+-
+-    # poison_mask: (N,) -> (N,1,1,1) broadcastable
+-    poison_mask_exp = poison_mask.view(-1, 1, 1, 1)
+-
+-    # 构造 replacement tensor (1.0) 与 images 形状一致
+-    # 使用 ones_like(images) 会消耗较多显存，所以下面只在 mask 为 True 的位置替换成 1.0
+-    # 使用 torch.where：条件是 (poison_mask_exp & batch_pattern_mask)
+-    replace_val = torch.tensor(1.0, device=dev, dtype=images.dtype)
+-
+-    # 执行一次性替换（全部在 GPU 上）
+-    images_after = torch.where(poison_mask_exp & batch_pattern_mask, replace_val, images)
+-
+-    # labels：对于被污染的样本设置为 handle.target，否则保留原 label（调用处需要合并）
++    trigger_type = params.get('trigger_type', 'patch')
++    pm_exp = poison_mask.view(-1, 1, 1, 1)
++
++    if trigger_type in ('patch', 'inverted'):
++        pm_key = f"pm_{index}_{params.get('type','')}_{str(dev)}"
++        if pm_key not in _patch_masks:
++            positions = params.get(f'{index}_poison_pattern', [])
++            _patch_masks[pm_key] = get_patch_mask(positions, dev)
++        pm_mask = _patch_masks[pm_key]
++        raw_val = 0.0 if trigger_type == 'inverted' else 1.0
++        triggered = apply_patch_norm(images, pm_mask, raw_value=raw_val)
++    else:
++        amplitude = float(params.get('trigger_amplitude_raw', 0.1145))
++        seed      = int(params.get('trigger_noise_seed', 42))
++        rd_key    = (trigger_type, amplitude, seed)
++        if rd_key not in _raw_deltas:
++            _raw_deltas[rd_key] = make_raw_delta(trigger_type, amplitude=amplitude, seed=seed)
++        triggered = apply_additive_norm(images, _raw_deltas[rd_key])
++
++    images_after = torch.where(pm_exp.expand_as(images).bool(), triggered, images)
+     poisoned_labels = torch.full((images.size(0),), handle.target, device=dev, dtype=torch.long)
+-
+     return images_after, poisoned_labels
+ 
+ 
+@@ -88,6 +128,31 @@ def _get_data_iterator(dataset):
+     return dataset
+ 
+ 
++# [ADDED] Lightweight UAP used by the UAP-suppression loss term in standard_train.
++# Computes a universal adversarial perturbation toward `target` from the model's
++# current state (global state at call time) using PGD with Adam.
++def _compute_uap(model, test_loader, target, eps, steps, n_images=128):
++    model.eval()
++    batches, collected = [], 0
++    for imgs, _ in test_loader:
++        batches.append(imgs)
++        collected += len(imgs)
++        if collected >= n_images:
++            break
++    images = torch.cat(batches)[:n_images].to(device)
++    delta = torch.zeros(1, *images.shape[1:], device=device, requires_grad=True)
++    opt = torch.optim.Adam([delta], lr=0.01)
++    for _ in range(steps):
++        opt.zero_grad()
++        (-torch.softmax(model((images + delta).clamp(0, 1)), dim=1)[:, target].mean()).backward()
++        opt.step()
++        with torch.no_grad():
++            delta.clamp_(-eps, eps)
++    model.train()
++    return delta.detach()
++# [END ADDED]
++
++
+ def standard_train(epoch, dataset_size, client, params, model, dataset, handle, poison=False):
+     """
+     优化后的训练函数（GPU 优先、AMP 支持、GPU 上批量毒化、延迟同步统计）
+@@ -121,6 +186,24 @@ def standard_train(epoch, dataset_size, client, params, model, dataset, handle,
+     # poison_rate
+     poison_rate = float(params.get('poison_rate', 0.0)) if poison else 0.0
+ 
++    # [ADDED] Class-bias penalty: penalise mean p_target on clean test images.
++    # Directly reduces the model's target-class bias, which is what FilterFL's
++    # Stage-3 GAN probe scores. Cheaper than UAP suppression (no adversarial
++    # optimisation loop) and more directly aligned with the probe signal.
++    # Tune: uap_mu (start 0.01–0.1), uap_n_images_train (128).
++    uap_mu = float(params.get('uap_mu', 0.0))
++    penalty_images = None
++    if poison and uap_mu > 0.0:
++        _n = int(params.get('uap_n_images_train', 128))
++        _batches, _collected = [], 0
++        for _imgs, _ in handle.test_data:
++            _batches.append(_imgs)
++            _collected += len(_imgs)
++            if _collected >= _n:
++                break
++        penalty_images = torch.cat(_batches)[:_n].to(device)
++    # [END ADDED]
++
+     use_amp = (device.type == 'cuda') and torch.cuda.is_available()
+     scaler = torch.cuda.amp.GradScaler() if use_amp else None
+ 
+@@ -181,6 +264,13 @@ def standard_train(epoch, dataset_size, client, params, model, dataset, handle,
+                 with torch.cuda.amp.autocast():
+                     outputs = model(images)
+                     loss = loss_func(outputs, labels)
++                    # [ADDED] Class-bias penalty on clean test images.
++                    if penalty_images is not None:
++                        clean_probs = torch.softmax(
++                            model(penalty_images), dim=1
++                        )[:, handle.target].mean()
++                        loss = loss + uap_mu * clean_probs
++                    # [END ADDED]
+                 # backward & step via scaler
+                 scaler.scale(loss).backward()
+                 scaler.step(optimizer)
+@@ -188,6 +278,13 @@ def standard_train(epoch, dataset_size, client, params, model, dataset, handle,
+             else:
+                 outputs = model(images)
+                 loss = loss_func(outputs, labels)
++                # [ADDED] Class-bias penalty on clean test images (non-AMP path).
++                if penalty_images is not None:
++                    clean_probs = torch.softmax(
++                        model(penalty_images), dim=1
++                    )[:, handle.target].mean()
++                    loss = loss + uap_mu * clean_probs
++                # [END ADDED]
+                 loss.backward()
+                 optimizer.step()
+ 
+diff --git a/trigger_utils.py b/trigger_utils.py
+new file mode 100644
+index 0000000..a8fedbe
+--- /dev/null
++++ b/trigger_utils.py
+@@ -0,0 +1,287 @@
++"""trigger_utils.py — shared trigger module.
++
++All triggers are applied in raw [0,1] pixel space:
++  x_raw → x_raw + δ → clamp([0,1]) → normalize
++or for patch:
++  x_raw[mask] = raw_value → normalize
++
++Import:
++    import trigger_utils as tu  (after sys.path.insert(0, FilterFL_dir))
++
++Required API used across scripts:
++    tu.VERSION            — str
++    tu.MEAN, tu.STD       — per-channel lists (ImageNet stats, float32)
++    tu.make_raw_delta(name, amplitude, seed)  → (C,H,W) float32 numpy
++    tu.apply_additive_norm(imgs_norm, delta_raw_np) → tensor (same device)
++    tu.apply_patch_norm(imgs_norm, patch_mask, raw_value=1.0)  → tensor
++    tu.get_patch_mask(positions, device) → (C,H,W) bool tensor
++"""
++
++import numpy as np
++import torch
++
++VERSION = "1.3.0"
++
++# ImageNet normalisation used by FilterFL for CIFAR-10 (handle.py lines 69-73).
++MEAN = [0.485, 0.456, 0.406]
++STD  = [0.229, 0.224, 0.225]
++
++# --- internal helpers -------------------------------------------------------
++
++_MEAN_T = {}   # device → (1,3,1,1) tensor
++_STD_T  = {}
++
++def _tensors(device):
++    dev_key = str(device)
++    if dev_key not in _MEAN_T:
++        _MEAN_T[dev_key] = torch.tensor(MEAN, dtype=torch.float32,
++                                        device=device).view(1, 3, 1, 1)
++        _STD_T[dev_key]  = torch.tensor(STD,  dtype=torch.float32,
++                                        device=device).view(1, 3, 1, 1)
++    return _MEAN_T[dev_key], _STD_T[dev_key]
++
++
++def _to_raw(x_norm):
++    """Normalized (N,3,H,W) → raw [0,1] (no clamp; caller clamps if needed)."""
++    m, s = _tensors(x_norm.device)
++    return x_norm * s + m
++
++
++def _to_norm(x_raw):
++    """Raw [0,1] (N,3,H,W) → normalized."""
++    m, s = _tensors(x_raw.device)
++    return (x_raw - m) / s
++
++
++# --- public API -------------------------------------------------------------
++
++def make_raw_delta(name, amplitude=0.1145, seed=42, C=3, H=32, W=32):
++    """Return (C,H,W) float32 numpy delta in raw [0,1] space.
++
++    name:
++      'checker'                — ±amplitude alternating checkerboard (all channels)
++      'checker_energy_matched' — checker at amp=3.268/√(C·H·W)=0.05896 (ignores amplitude)
++      'eps4'                   — ±4/255 checkerboard (amplitude ignored)
++      'eps8'                   — ±8/255 checkerboard (amplitude ignored)
++      'eps16'                  — ±16/255 checkerboard (amplitude ignored)
++      'eps32'                  — ±32/255 checkerboard (amplitude ignored)
++      'eps64'                  — ±64/255 checkerboard (amplitude ignored)
++      'noise'                  — ±amplitude fixed-seed uniform random (seed=42 default)
++      'stripes'                — ±amplitude alternating horizontal rows (all channels)
++      'sin16'                  — sinusoidal period-16 scaled to match checker L2
++      'sin32'                  — sinusoidal period-32 scaled to match checker L2
++      'corner4x4'              — ±amplitude checkerboard in top-left 4×4 pixels
++      'corner4x4_energy_matched' — corner4x4 at amp=3.268/√(C·16)=0.4717 (ignores amplitude)
++      'cov64pos'               — ±amplitude at 64 deterministic positions (seed controls selection)
++      'gradient'               — horizontal centered linear ramp, hardcoded amp=0.2 (L2_raw≈3.3)
++      'sin_large'              — sin16 at 3× checker_energy_matched amplitude (L2_raw≈9.8)
++
++    Energy-matched amplitudes reference patch L2_raw=3.268 (unit-test batch, 500 CIFAR-10
++    test images from pickle). Pooling-gain batch gives 3.384 (DataLoader, different composition).
++    """
++    rows = np.arange(H, dtype=np.float32).reshape(H, 1)
++    cols = np.arange(W, dtype=np.float32).reshape(1, W)
++
++    if name == 'checker':
++        hw = ((rows.astype(int) + cols.astype(int)) % 2).astype(np.float32) * 2.0 - 1.0
++        delta = np.stack([hw * amplitude] * C, axis=0)  # (C,H,W)
++
++    elif name == 'checker_energy_matched':
++        _em_amp = 3.268 / (C * H * W) ** 0.5   # 0.05896; ignores amplitude param
++        hw = ((rows.astype(int) + cols.astype(int)) % 2).astype(np.float32) * 2.0 - 1.0
++        delta = np.stack([hw * _em_amp] * C, axis=0)
++
++    elif name == 'eps4':
++        hw = ((rows.astype(int) + cols.astype(int)) % 2).astype(np.float32) * 2.0 - 1.0
++        delta = np.stack([hw * (4.0 / 255.0)] * C, axis=0)
++
++    elif name == 'eps8':
++        hw = ((rows.astype(int) + cols.astype(int)) % 2).astype(np.float32) * 2.0 - 1.0
++        delta = np.stack([hw * (8.0 / 255.0)] * C, axis=0)
++
++    elif name == 'eps16':
++        hw = ((rows.astype(int) + cols.astype(int)) % 2).astype(np.float32) * 2.0 - 1.0
++        delta = np.stack([hw * (16.0 / 255.0)] * C, axis=0)
++
++    elif name == 'eps32':
++        hw = ((rows.astype(int) + cols.astype(int)) % 2).astype(np.float32) * 2.0 - 1.0
++        delta = np.stack([hw * (32.0 / 255.0)] * C, axis=0)
++
++    elif name == 'eps64':
++        hw = ((rows.astype(int) + cols.astype(int)) % 2).astype(np.float32) * 2.0 - 1.0
++        delta = np.stack([hw * (64.0 / 255.0)] * C, axis=0)
++
++    elif name == 'noise':
++        rng = np.random.RandomState(seed)
++        signs = rng.choice([-1.0, 1.0], size=(C, H, W)).astype(np.float32)
++        delta = signs * amplitude
++
++    elif name == 'stripes':
++        row_sign = ((np.arange(H, dtype=int) % 2) * 2 - 1).astype(np.float32)  # ±1 per row
++        pat = np.broadcast_to(row_sign.reshape(H, 1), (H, W)) * amplitude
++        delta = np.stack([pat.copy()] * C, axis=0)
++
++    elif name == 'sin16':
++        row_v = np.sin(2 * np.pi / 16 * np.arange(H)).astype(np.float32)
++        ss = float(np.sum(row_v ** 2))
++        sin_amp = float(amplitude * np.sqrt(H / ss))  # scale to match checker L2
++        row_scaled = (row_v * sin_amp)
++        delta = np.stack([np.broadcast_to(row_scaled.reshape(H, 1), (H, W)).copy()] * C, axis=0)
++
++    elif name == 'sin32':
++        row_v = np.sin(2 * np.pi / 32 * np.arange(H)).astype(np.float32)
++        ss = float(np.sum(row_v ** 2))
++        sin_amp = float(amplitude * np.sqrt(H / ss))  # scale to match checker L2
++        row_scaled = (row_v * sin_amp)
++        delta = np.stack([np.broadcast_to(row_scaled.reshape(H, 1), (H, W)).copy()] * C, axis=0)
++
++    elif name == 'corner4x4':
++        delta = np.zeros((C, H, W), dtype=np.float32)
++        for r in range(4):
++            for c in range(4):
++                delta[:, r, c] = (((r + c) % 2) * 2.0 - 1.0) * amplitude
++
++    elif name == 'corner4x4_energy_matched':
++        _em_amp_c4 = 3.268 / (C * 16) ** 0.5   # 0.4717; ignores amplitude param
++        delta = np.zeros((C, H, W), dtype=np.float32)
++        for r in range(4):
++            for c in range(4):
++                delta[:, r, c] = (((r + c) % 2) * 2.0 - 1.0) * _em_amp_c4
++
++    elif name == 'blend_87':
++        # 87.5% checker + 12.5% stripes, renormalized to checker L2.
++        hw = ((rows.astype(int) + cols.astype(int)) % 2).astype(np.float32) * 2.0 - 1.0
++        d_chk = np.stack([hw * amplitude] * C, axis=0)
++        row_sign = ((np.arange(H, dtype=int) % 2) * 2 - 1).astype(np.float32)
++        pat = np.broadcast_to(row_sign.reshape(H, 1), (H, W)) * amplitude
++        d_str = np.stack([pat.copy()] * C, axis=0)
++        d_mix = 0.875 * d_chk + 0.125 * d_str
++        l2_chk = float(np.linalg.norm(d_chk))
++        l2_mix = float(np.linalg.norm(d_mix))
++        delta = d_mix * (l2_chk / l2_mix) if l2_mix > 1e-9 else d_mix
++
++    elif name == 'blend_75':
++        # 75% checker + 25% stripes, renormalized to checker L2.
++        hw = ((rows.astype(int) + cols.astype(int)) % 2).astype(np.float32) * 2.0 - 1.0
++        d_chk = np.stack([hw * amplitude] * C, axis=0)
++        row_sign = ((np.arange(H, dtype=int) % 2) * 2 - 1).astype(np.float32)
++        pat = np.broadcast_to(row_sign.reshape(H, 1), (H, W)) * amplitude
++        d_str = np.stack([pat.copy()] * C, axis=0)
++        d_mix = 0.75 * d_chk + 0.25 * d_str
++        l2_chk = float(np.linalg.norm(d_chk))
++        l2_mix = float(np.linalg.norm(d_mix))
++        delta = d_mix * (l2_chk / l2_mix) if l2_mix > 1e-9 else d_mix
++
++    elif name == 'blend_25':
++        # 25% checker + 75% stripes, renormalized to checker L2.
++        hw = ((rows.astype(int) + cols.astype(int)) % 2).astype(np.float32) * 2.0 - 1.0
++        d_chk = np.stack([hw * amplitude] * C, axis=0)
++        row_sign = ((np.arange(H, dtype=int) % 2) * 2 - 1).astype(np.float32)
++        pat = np.broadcast_to(row_sign.reshape(H, 1), (H, W)) * amplitude
++        d_str = np.stack([pat.copy()] * C, axis=0)
++        d_mix = 0.25 * d_chk + 0.75 * d_str
++        l2_chk = float(np.linalg.norm(d_chk))
++        l2_mix = float(np.linalg.norm(d_mix))
++        delta = d_mix * (l2_chk / l2_mix) if l2_mix > 1e-9 else d_mix
++
++    elif name == 'stripes_p4':
++        # Period-4 horizontal stripes: ±amplitude alternating per 2-row block.
++        row_sign = ((np.arange(H, dtype=int) // 2) % 2 * 2 - 1).astype(np.float32)
++        pat = np.broadcast_to(row_sign.reshape(H, 1), (H, W)) * amplitude
++        delta = np.stack([pat.copy()] * C, axis=0)
++
++    elif name == 'low_col_opt':
++        # Gradient-optimised trigger: minimises max |cos(feat_shift_dir, W_fc_norm[c])|
++        # on the FL-trained clean model. Constrained to checker L2.
++        _lco_path = ('/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl'
++                     '/ffl_step5/low_col_opt_delta.npy')
++        delta = np.load(_lco_path).astype(np.float32)
++
++    elif name == 'truck_grad':
++        # Input-gradient trigger: mean_x grad_x(max_{c!=0} logit_c(x)) on clean ResNet8.
++        # Maximises the natural-class margin Δ_nat; pattern is non-grating noise.
++        # Pre-computed from step5_clean_resnet8.pt, normalized to checker L2.
++        _tg_path = ('/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl'
++                    '/ffl_step5/truck_grad_delta.npy')
++        delta = np.load(_tg_path).astype(np.float32)
++
++    elif name == 'cov64pos':
++        # 64 deterministic random positions; ±amplitude alternating by position index.
++        rng = np.random.RandomState(seed)
++        positions = [(int(r), int(c))
++                     for r, c in zip(rng.randint(0, H, 64), rng.randint(0, W, 64))]
++        delta = np.zeros((C, H, W), dtype=np.float32)
++        for k, (r, c) in enumerate(positions):
++            sign = 1.0 if k % 2 == 0 else -1.0
++            delta[:, r, c] = sign * amplitude
++
++    elif name == 'gradient':
++        # Horizontal centered linear ramp: v_col = 0.2*(col/(W-1) - 0.5), range≈(−0.10, +0.10).
++        # Hardcoded amp=0.2; empirical L2_raw≈3.3 (close to reference 3.268). Ignores amplitude.
++        _grad_amp = 0.2
++        w_frac = np.arange(W, dtype=np.float32) / max(W - 1, 1)
++        pat = (w_frac - 0.5) * _grad_amp             # (W,), centered at 0
++        pat2d = np.broadcast_to(pat.reshape(1, W), (H, W)).copy()
++        delta = np.stack([pat2d] * C, axis=0)
++
++    elif name == 'sin_large':
++        # sin16 at 3× checker_energy_matched amplitude ≈ 0.1769; L2_raw≈9.8 (3× reference).
++        # Ignores amplitude param. Tests whether high-amplitude low-frequency trigger implants.
++        _sl_amp = 3.0 * (3.268 / (C * H * W) ** 0.5)   # 3 × 0.05896 = 0.1769
++        row_v = np.sin(2 * np.pi / 16 * np.arange(H)).astype(np.float32)
++        ss = float(np.sum(row_v ** 2))
++        sin_amp = float(_sl_amp * np.sqrt(H / ss))
++        row_scaled = row_v * sin_amp
++        delta = np.stack([np.broadcast_to(row_scaled.reshape(H, 1), (H, W)).copy()] * C, axis=0)
++
++    else:
++        raise ValueError(f"Unknown trigger name: {name!r}")
++
++    return delta.astype(np.float32)
++
++
++def apply_additive_norm(imgs_norm, delta_raw_np):
++    """Apply additive trigger in raw space; return normalized tensor (same device).
++
++    imgs_norm   : (N,3,H,W) normalized tensor
++    delta_raw_np: (3,H,W) numpy array in raw [0,1] space
++    """
++    delta_t = torch.from_numpy(delta_raw_np).to(imgs_norm.device).unsqueeze(0)
++    raw = _to_raw(imgs_norm)
++    raw_triggered = torch.clamp(raw + delta_t, 0.0, 1.0)
++    return _to_norm(raw_triggered)
++
++
++def apply_patch_norm(imgs_norm, patch_mask, raw_value=1.0):
++    """Apply patch (pixel replacement) in raw space; return normalized tensor.
++
++    imgs_norm  : (N,3,H,W) normalized tensor
++    patch_mask : (3,H,W) bool tensor
++    raw_value  : replacement pixel value in [0,1] raw space (default 1.0 = white)
++    """
++    raw = _to_raw(imgs_norm)
++    fill = torch.full_like(raw, raw_value)
++    mask_exp = patch_mask.unsqueeze(0).expand_as(raw)
++    raw_triggered = torch.where(mask_exp, fill, raw)
++    # No clamp needed: raw_value must be in [0,1] and raw is already in [0,1].
++    return _to_norm(raw_triggered)
++
++
++def checker_amplitude_for_l2(target_l2, C=3, H=32, W=32):
++    """Checker amplitude that achieves target_l2 on unclamped images.
++
++    For a full-image checkerboard at ±amp (all C×H×W pixels hit):
++        L2_raw = amp × sqrt(C × H × W)
++    Inverting gives the amplitude needed to match a target L2.
++    Note: clamping will reduce the empirical L2 slightly, so this is an upper bound.
++    """
++    return target_l2 / (C * H * W) ** 0.5
++
++
++def get_patch_mask(positions, device):
++    """Build (3,H,W) bool tensor from list of [row,col] positions (CIFAR-10: 32×32)."""
++    C, H, W = 3, 32, 32
++    mask = torch.zeros(C, H, W, dtype=torch.bool, device=device)
++    for pos in positions:
++        mask[:, int(pos[0]), int(pos[1])] = True
++    return mask
