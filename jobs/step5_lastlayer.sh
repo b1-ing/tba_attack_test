@@ -1,0 +1,214 @@
+#!/bin/bash
+#SBATCH --job-name=step5_llayer
+#SBATCH --time=04:00:00
+#SBATCH --mem=32G
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=4
+#SBATCH --partition=gpuL
+#SBATCH --output=%x_%A.out
+#SBATCH --exclude=node871,node877
+
+# Last-layer probe: locate where the backdoor actually accumulates.
+#
+# D(t) (global projection) is flat at -7 while ASR climbs to 97% — the trigger
+# is stored locally, not as global model drift. This run logs per-round:
+#   [LASTLAYER] ep=X bias_target=Y weight_norm_target=Z
+# to directly measure the target-class bias and weight norm growth.
+#
+# Setup: FedAvg (no defense), normcap cap=0.057, seed=1, 600 rounds.
+# Same conditions as D(t) arm 3 (cap=0.057) for direct comparison.
+
+TARGET_NORM=0.057
+ROUNDS=600
+SEED=1
+
+echo "step5_llayer job $SLURM_JOB_ID on $(hostname)"
+echo "cap=$TARGET_NORM rounds=$ROUNDS seed=$SEED"
+
+SCRATCH=/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/scratch
+SCRATCH_DIR=$SCRATCH/step5_llayer_${SLURM_JOB_ID}
+mkdir -p $SCRATCH_DIR
+
+OUT_DIR=$HOME/ffl_step5
+mkdir -p $OUT_DIR
+
+REPO=$HOME/tba_attack_test
+VENV=$HOME/venvs/tba_attack
+DATA_DIR=$HOME/filterfl_test/filterfl_test/data/cifar-10-batches-py
+PYTHON=/opt/apps/el9-fix/apps/binapps/anaconda3/2024.10/bin/python3.12
+
+[[ -x "$PYTHON" ]] || { echo "FATAL: anaconda3 python not accessible on $(hostname)"; exit 1; }
+export PYTHONPATH=$VENV/lib/python3.12/site-packages${PYTHONPATH:+:$PYTHONPATH}
+
+cp -r $REPO/FilterFL $SCRATCH_DIR/
+mkdir -p $SCRATCH_DIR/FilterFL/data
+cp -r $DATA_DIR $SCRATCH_DIR/FilterFL/data/ 2>/dev/null && echo "CIFAR-10 staged"
+
+# ── Patch: normcap + last-layer logging ──────────────────────────────────────
+export SCRATCH_DIR TARGET_NORM
+$PYTHON -I - <<'PATCHEOF'
+import os, sys, py_compile
+
+scratch = os.environ['SCRATCH_DIR']
+tn      = float(os.environ['TARGET_NORM'])
+alg_path = f'{scratch}/FilterFL/algorithm.py'
+
+with open(alg_path) as f:
+    src = f.read()
+
+# Normcap patch (before aggregation marker)
+normcap = f'''\
+        # [NORMCAP] Cap adversarial delta to {tn}.
+        _lnc_target = {tn}
+        _lnc_keys = [k for k in ori_weight if ori_weight[k].dtype != torch.int64]
+        for _lnc_i, _lnc_name in enumerate(agent_name_keys):
+            if _lnc_name in adversarial_name_keys:
+                _lnc_delta_sq = sum(
+                    (w_locals[_lnc_i][k] - ori_weight[k]).float().pow(2).sum().item()
+                    for k in _lnc_keys)
+                _lnc_delta_norm = _lnc_delta_sq ** 0.5
+                if _lnc_delta_norm > _lnc_target:
+                    _lnc_scale = _lnc_target / _lnc_delta_norm
+                    for k in _lnc_keys:
+                        w_locals[_lnc_i][k] = (
+                            ori_weight[k] +
+                            (w_locals[_lnc_i][k] - ori_weight[k]) * _lnc_scale
+                        ).to(w_locals[_lnc_i][k].dtype)
+        # [END NORMCAP]
+'''
+
+agg_marker = '        # ── FLAME / FLTrust aggregation'
+if agg_marker not in src:
+    print('ERROR: agg_marker not found'); sys.exit(1)
+src = src.replace(agg_marker, normcap + agg_marker, 1)
+
+# Last-layer logging: insert after handle.model.load_state_dict(w_glob)
+ll_log = '''\
+        # [LASTLAYER] Log target-class last-layer bias + weight norm per round.
+        _ll_bias  = handle.model.linear1.bias[handle.target].item()
+        _ll_wnorm = handle.model.linear1.weight[handle.target].norm().item()
+        logger.info(f'[LASTLAYER] ep={epoch} bias_target={_ll_bias:.6f} weight_norm_target={_ll_wnorm:.6f}')
+        # [END LASTLAYER]
+'''
+
+ll_marker = '        handle.model.load_state_dict(w_glob)\n'
+if ll_marker not in src:
+    print('ERROR: load_state_dict marker not found'); sys.exit(1)
+src = src.replace(ll_marker, ll_marker + ll_log, 1)
+
+with open(alg_path, 'w') as f:
+    f.write(src)
+
+try:
+    py_compile.compile(alg_path, doraise=True)
+    print(f'Patch applied (cap={tn}): compiles OK')
+except py_compile.PyCompileError as e:
+    print(f'compile error: {e}'); sys.exit(1)
+PATCHEOF
+if [[ $? -ne 0 ]]; then echo "Patch failed"; exit 1; fi
+
+# ── YAML ──────────────────────────────────────────────────────────────────────
+$PYTHON -I - <<PYEOF
+import yaml
+with open('$SCRATCH_DIR/FilterFL/cifar_params.yaml') as f:
+    p = yaml.load(f, Loader=yaml.FullLoader)
+p['number_of_total_participants'] = 100
+p['num_clients']                  = 10
+p['poison_client_num']            = 10
+p['local_epochs']                 = 2
+p['lr']                           = 0.01
+p['momentum']                     = 0.9
+p['poison_rate']                  = 0.5
+p['epochs']                       = $ROUNDS
+p['seed']                         = $SEED
+p['dirichlet_alpha']              = 0.5
+p['probe_save_epochs']            = []
+with open('$SCRATCH_DIR/FilterFL/cifar_params.yaml', 'w') as f:
+    yaml.dump(p, f)
+print('yaml ok defense=None cap=$TARGET_NORM rounds=$ROUNDS', flush=True)
+PYEOF
+
+LOG=$OUT_DIR/step5_llayer.log
+
+cd $SCRATCH_DIR/FilterFL
+mkdir -p saved_models
+$PYTHON main.py --defense None 2>&1 | tee $LOG
+
+echo "Training done."
+
+# ── Analysis ──────────────────────────────────────────────────────────────────
+$PYTHON -I -W ignore - <<'SUMEOF'
+import re, sys, warnings
+warnings.filterwarnings('ignore')
+sys.path.insert(0, '/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/venvs/tba_attack/lib/python3.12/site-packages')
+import numpy as np
+
+LOG  = open('/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/step5_llayer.log').read()
+CTRL = 0.019
+
+# ASR trajectory
+evals = re.findall(r'___Global_Test_Poison:(False|True).*?Accuracy: \d+/\d+ \(([\d.]+)%\)', LOG)
+pairs = []
+i = 0
+while i+1 < len(evals):
+    if evals[i][0]=='False' and evals[i+1][0]=='True':
+        pairs.append((float(evals[i][1])/100, float(evals[i+1][1])/100))
+    i += 2
+
+# Last-layer trajectory
+ll = re.findall(r'\[LASTLAYER\] ep=(\d+) bias_target=([+-]?[\d.]+) weight_norm_target=([\d.]+)', LOG)
+
+OUT = [f'=== Last-layer probe: cap={0.057} seed=1 rounds=600 ===', '']
+if pairs:
+    impl = next((ep+1 for ep,(c,a) in enumerate(pairs) if a-CTRL > 0.5), None)
+    # Stable impl
+    stable = None
+    for j,(c,a) in enumerate(pairs):
+        if a-CTRL > 0.50:
+            future = pairs[j+1:j+11]
+            if all(fa-CTRL > 0.30 for _,fa in future):
+                stable = j+1; break
+    OUT.append(f'  Stable implantation eval: {stable}')
+    OUT.append(f'  Final ASR: {pairs[-1][1]:.3f} (net={max(0,pairs[-1][1]-CTRL):.3f})')
+    OUT.append('')
+
+if ll:
+    eps    = np.array([int(r[0]) for r in ll])
+    biases = np.array([float(r[1]) for r in ll])
+    wnorms = np.array([float(r[2]) for r in ll])
+    OUT.append('  Last-layer target-class metrics (every 50 rounds):')
+    OUT.append(f'  {"ep":>5}  {"bias_target":>12}  {"weight_norm":>12}  {"net_asr":>8}')
+    for i in range(0, len(ll), 50):
+        ep = eps[i]; b = biases[i]; w = wnorms[i]
+        asr_str = f'{max(0, pairs[i][1]-CTRL):.3f}' if i < len(pairs) else '?'
+        OUT.append(f'  {ep:5d}  {b:12.6f}  {w:12.6f}  {asr_str:>8}')
+    # Final
+    OUT.append(f'  {eps[-1]:5d}  {biases[-1]:12.6f}  {wnorms[-1]:12.6f}  (final)')
+
+    # Correlations
+    if len(eps) > 10:
+        r_bias = np.corrcoef(eps, biases)[0,1]
+        r_wt   = np.corrcoef(eps, wnorms)[0,1]
+        OUT.append('')
+        OUT.append(f'  Correlation(bias, ep):        r={r_bias:.4f}')
+        OUT.append(f'  Correlation(weight_norm, ep): r={r_wt:.4f}')
+        OUT.append(f'  (strong positive r = monotonic local accumulation)')
+
+    # Find when bias starts rising (first ep where bias > initial bias + 0.1)
+    init_bias = biases[0]
+    rise_ep = next((eps[i] for i in range(len(ll)) if biases[i] > init_bias + 0.1), None)
+    OUT.append(f'  Bias initial: {init_bias:.6f}')
+    OUT.append(f'  Bias +0.1 first at ep: {rise_ep}')
+    if stable and rise_ep:
+        OUT.append(f'  Bias rise precedes stable impl? {rise_ep < stable}')
+else:
+    OUT.append('  [No LASTLAYER rows found]')
+
+out = '\n'.join(OUT)
+print(out)
+with open('/mnt/iusers01/fse-ugpgt01/compsci01/x77599jl/ffl_step5/step5_llayer_summary.txt', 'w') as f:
+    f.write(out + '\n')
+print('Saved summary.')
+SUMEOF
+
+echo "Done."
